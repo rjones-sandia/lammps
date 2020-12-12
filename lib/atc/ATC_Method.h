@@ -140,9 +140,9 @@ namespace ATC {
     /** compute scalar for output */
     virtual double compute_scalar() {return 0.;}
     /** compute vector for output */
-    virtual double compute_vector(int /* n */) {return 0.;}
+    virtual double compute_vector(int n) {return 0.;}
     /** compute vector for output */
-    virtual double compute_array(int /* irow */, int /* icol */) {return 0.;}; 
+    virtual double compute_array(int irow, int icol) {return 0.;}; 
     int scalar_flag() const {return scalarFlag_;}
     int vector_flag() const {return vectorFlag_;}
     int size_vector() const {return sizeVector_;}
@@ -302,6 +302,9 @@ namespace ATC {
     const std::map<int,int> & atom_to_internal_map() {return atomToInternal_;};
     /** access to xref */
     double ** xref() {return xref_;};
+    /** pass through to create_nodeset */
+    void create_nodeset(const std::string & name, const std::set<int> & nodeset)
+      { feEngine_->create_nodeset(name,nodeset); }
     /** access to faceset names */
     const std::set<PAIR> &faceset(const std::string & name) const {return (feEngine_->fe_mesh())->faceset(name);};
     DENS_VEC copy_nodal_coordinates(int i) const { return feEngine_->fe_mesh()->nodal_coordinates(i); }
@@ -398,8 +401,8 @@ namespace ATC {
 //    /** determine weighting method for atomic integration */
 //    void compute_consistent_md_mass_matrix(const SPAR_MAT & shapeFunctionMatrix,
  //                                          SPAR_MAT & mdMassMatrix);
-    virtual void compute_md_mass_matrix(FieldName /* thisField */,
-                                        DIAG_MAT & /* massMat */) {};
+    virtual void compute_md_mass_matrix(FieldName thisField,
+                                        DIAG_MAT & massMat) {};
 /** access to md mass matrices */
 
     DIAG_MAN &mass_mat_md_inv(FieldName thisField)
@@ -828,6 +831,7 @@ namespace ATC {
     int accumulantBandwidth_;
     /*@}*/
 
+    Array<TimeFilter *> timeFilters_;
 
     //---------------------------------------------------------------
     /** \name restart procedures */

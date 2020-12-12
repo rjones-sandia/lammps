@@ -2,7 +2,7 @@
 #define LAMMPS_INTERFACE_H
 
 #include <iostream>
-#include <cstdlib>
+#include <stdlib.h>
 #include <map>
 #include <iostream>
 #include <string>
@@ -10,17 +10,17 @@
 #include <fstream>
 #include <utility>
 #include "mpi.h"
-#include "../../src/lmptype.h"
-#include "../../src/lammps.h"
-#include "../../src/comm.h"
-#include "../../src/modify.h"
-#include "../../src/memory.h"
-#include "../../src/random_park.h"
+#include "lammps.h"
+#include "comm.h"
+#include "modify.h"
+#include "memory.h"
+#include "random_park.h"
 typedef LAMMPS_NS::RanPark* RNG_POINTER;
-#include "../../src/compute.h"
+#include "lmptype.h"
+#include "compute.h"
 typedef const LAMMPS_NS::Compute* COMPUTE_POINTER;
-#include "../../src/update.h"
-#include "../../src/min.h"
+#include "update.h"
+#include "min.h"
 #include "ATC_Error.h"
 #include "ATC_TypeDefs.h"
 #include "MatrixDef.h"
@@ -47,7 +47,18 @@ namespace LAMMPS_NS {
 
 namespace ATC {
 
-static const std::string atomPeNameBase_ = "atcPE";
+const double amu2kg = 1.66053886e-27;
+const double A2m  = 1.e-10;
+const double ps2s = 1.e-12;
+const double fs2s = 1.e-15;
+
+// stress m/t^2 L
+const double GPa2metal_ = 1.e9/(amu2kg/(ps2s*ps2s*A2m));
+const double GPa2real_  = 1.e9/(amu2kg/(fs2s*fs2s*A2m));
+// heat flux  m L/t^2
+const double WmK2metal_ = 1.0/(amu2kg*A2m/(ps2s*ps2s*ps2s));
+const double WmK2real_  = 1.0/(amu2kg*A2m/(fs2s*fs2s*fs2s));
+
 static const double big_ = 1.e20;
 
 /**
@@ -123,6 +134,7 @@ class LammpsInterface {
     MPI_Comm_size(lammps_->world, & commSize_);
   }
 
+
   /** \name Methods that interface with lammps base class */
   /*@{*/
 // begin MPI --------------------------------------------------------------------
@@ -141,6 +153,12 @@ class LammpsInterface {
   void allsum(void * send_buf, double * rec_buf, int count = 1) const
   {
     MPI_Wrappers::allsum(lammps_->world, send_buf, rec_buf, count);
+  }
+  double allsum(double & x) const
+  {
+    double y = 0;
+    MPI_Wrappers::allsum(lammps_->world, &x, &y, 1);
+    return y;
   }
 
   void int_allsum(void * send_buf, int * rec_buf, int count = 1) const
@@ -315,7 +333,7 @@ class LammpsInterface {
     } 
     else {
       int commSize = comm_size();
-      double *recv = new double[commSize];
+      double recv[commSize];
       MPI_Wrappers::gather(lammps_->world,data,recv);
       if (rank_zero()) {
         full_msg << " ATC:" << tag;
@@ -324,7 +342,6 @@ class LammpsInterface {
         }
         full_msg << "\n";
       }
-      delete[] recv;
     }
     if (rank_zero()) {
       std::string mesg = full_msg.str();
@@ -465,6 +482,7 @@ class LammpsInterface {
   void unit_cell(double *a1, double *a2, double *a3) const;
   /** these functions are more than just simple pass throughs */
   int  num_atoms_per_cell(void) const;
+  void set_atoms_per_unit_cell(int* na) const; 
   double  volume_per_atom(void) const;
   void lattice(Matrix<double> &N, Matrix<double> &B) const;
   /*@}*/
@@ -534,7 +552,7 @@ class LammpsInterface {
   /** Dulong-Petit heat capacity per volume in M,L,T,t units */
   double heat_capacity(void) const;
   /** mass per volume in reference configuraturation in M,L units */
-  double mass_density(int* numPerType=nullptr) const;
+  double mass_density(void) const;
   /**  permittivity of free space, converts from LAMMPS potential units implied by the electric field units to LAMMPS charge units/LAMMPS length units (e.g., V to elemental charge/A) */
   double epsilon0(void) const;
   double coulomb_constant(void) const;
@@ -578,13 +596,13 @@ class LammpsInterface {
   void destroy_2d_int_array(int **i) const;
   int ** grow_2d_int_array(int **array, int n1, int n2, const char *name) const;
   template <typename T>
-    T * grow_array(T *&array, int n, const char *name) const {return lammps_->memory->grow(array,n,name);}
+    T * grow_array(T *&array, int n, const char *name) const {return lammps_->memory->grow(array,n,name);};
   template <typename T>
-    void destroy_array(T * array) {lammps_->memory->destroy(array);}
+    void destroy_array(T * array) {lammps_->memory->destroy(array);};
   template <typename T>
-    T ** grow_array(T **&array, int n1, int n2, const char *name) const {return lammps_->memory->grow(array,n1,n2,name);}
+    T ** grow_array(T **&array, int n1, int n2, const char *name) const {return lammps_->memory->grow(array,n1,n2,name);};
   template <typename T>
-    void destroy_array(T ** array) const {lammps_->memory->destroy(array);}
+    void destroy_array(T ** array) const {lammps_->memory->destroy(array);};
   /*@}*/
 
   /** \name Methods that interface with Update class */
@@ -657,9 +675,10 @@ class LammpsInterface {
   int     compute_matchstep(COMPUTE_POINTER computePointer, int step) const;
   void     reset_invoked_flag(COMPUTE_POINTER computePointer) const;
   // computes owned by ATC
-  int      create_compute_pe_peratom(void) const;
+  int      create_compute_pe_peratom(std::vector<std::string> * = nullptr) ;
   double * compute_pe_peratom(void) const;
   std::string compute_pe_name(void) const {return atomPeNameBase_;};//  +fix_id();}; enables unique names, if desired
+  void set_compute_pe_name(std::string name ) { atomPeNameBase_ = name;}
   void     computes_clearstep(void) const {lammps_->modify->clearstep_compute();};
   /*@}*/
  
@@ -669,6 +688,9 @@ class LammpsInterface {
   LAMMPS_NS::LAMMPS * lammps_pointer() const;
 
  protected:
+  /** name of compute pe per atom */
+  std::string atomPeNameBase_;
+
   /** transfer a const compute pointer to a non-const computer pointer */
   LAMMPS_NS::Compute * const_to_active(const LAMMPS_NS::Compute* computePointer) const;
 
@@ -694,6 +716,10 @@ class LammpsInterface {
   /** box info */
   mutable bool refBoxIsSet_;
   mutable double upper_[3],lower_[3],length_[3];
+
+  /** number of atoms per cell */
+  mutable int naCell_;
+  mutable int* numPerType_;
 
   /** registry of computer pointers */
   mutable std::set<LAMMPS_NS::Compute * > computePointers_;

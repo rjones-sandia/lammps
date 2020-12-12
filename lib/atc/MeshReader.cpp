@@ -20,16 +20,16 @@ namespace ATC {
   /** constructor, takes a filename */
   MeshReader::MeshReader(string filename, 
                          Array<bool> periodicity, 
-                         double /* tol */)
+                         double tol)
     : meshfile_(filename),
       periodicity_(periodicity),
       nNodes_(0),
-      nElements_(0)
+      nElements_(0),
+      nNodeSets_(0),
+      nSideSets_(0),
+      nElemSets_(0),
+      coordTol_(tol)
   {
-    conn_ = new Array2D<int>();
-    nodeCoords_ = new DENS_MAT;
-    nodeSets_ = new Array< std::pair< string,set<int> > >();
-
     size_t idx = filename.rfind('.');
     if (idx == string::npos) {
       throw ATC_Error("Given mesh file is of unknown type.");
@@ -44,19 +44,23 @@ namespace ATC {
   /** destructor */
   MeshReader::~MeshReader()
   {
-    if (conn_) delete conn_;
-    if (nodeCoords_) delete nodeCoords_;
-    if (nodeSets_) delete nodeSets_;
   }
 
   /** creates handle to new mesh object */
   FE_Mesh* MeshReader::create_mesh()
   {
-    return new FE_3DMesh(elementType_,
+    FE_Mesh * p =new FE_3DMesh(elementType_,
                          nNodes_, nElements_,
-                         conn_, nodeCoords_,
+                         &conn_, &nodeCoords_,
                          periodicity_,
-                         nodeSets_);
+                         &nodeSets_);
+    for (int i = 0; i < nElemSets_; ++i) {
+      p->create_elementset(elemSets_(i).first,elemSets_(i).second);
+    }
+    for (int i = 0; i < nSideSets_; ++i) {
+      p->create_faceset(sideSets_(i).first,sideSets_(i).second);
+    }
+    return p;
   }
 
   int MeshReader::number_of_vertices(string str)
@@ -87,14 +91,14 @@ namespace ATC {
       words >> section;
       if (section == "Coordinates") {
         words >> nNodes_;
-        nodeCoords_->reset(3, nNodes_, false);
+        nodeCoords_.reset(3, nNodes_, false);
         string line;
         for (int i = 0; i < nNodes_; ++i) {
           getline(in,line);
           istringstream coords(line);
-          coords >> (*nodeCoords_)(0, i);
-          coords >> (*nodeCoords_)(1, i);
-          coords >> (*nodeCoords_)(2, i);
+          coords >> nodeCoords_(0, i);
+          coords >> nodeCoords_(1, i);
+          coords >> nodeCoords_(2, i);
         }
         stringstream ss;
         ss << "read " << nNodes_ << " nodes";
@@ -104,7 +108,7 @@ namespace ATC {
         words >> nElements_;
         words >> elementType_;
         int nVerts = number_of_vertices(elementType_);
-        conn_->reset(nVerts, nElements_);
+        conn_.reset(nVerts, nElements_);
         string line;
         for (int i = 0; i < nElements_; ++i) {
           getline(in,line);
@@ -112,7 +116,7 @@ namespace ATC {
           for (int j = 0; j < nVerts; ++j ) {
             int node;
             verts >> node;
-            (*conn_)(j,i) = node-1;
+            conn_(j,i) = node-1;
           }
         }
         stringstream ss;
@@ -121,7 +125,7 @@ namespace ATC {
       }
       else if (section == "Nodesets") {
         words >> nNodeSets_;
-        nodeSets_->reset(nNodeSets_);
+        nodeSets_.reset(nNodeSets_);
         string infoline;
         string setName;
         int nNodes;
@@ -131,19 +135,74 @@ namespace ATC {
           istringstream info(infoline);
           info >> setName;
           info >> nNodes;
-          (*nodeSets_)(i).first = setName;
+          nodeSets_(i).first = setName;
           getline(in,line);
           istringstream nodes(line);
           for (int j = 0; j < nNodes; ++j ) {
             int node;
             nodes >> node;
-            (*nodeSets_)(i).second.insert(node-1);
+            nodeSets_(i).second.insert(node-1);
           }
         }
+        stringstream ss;
+        ss << "read " << nNodeSets_ << " node sets";
+        ATC::LammpsInterface::instance()->print_msg_once(ss.str());
+      }
+      else if (section == "Sidesets") {
+        words >> nSideSets_;
+        sideSets_.reset(nSideSets_);
+        string infoline;
+        string setName;
+        int nFaces;
+        string line;
+        for (int i = 0; i < nSideSets_; ++i) {
+          getline(in,infoline);
+          istringstream info(infoline);
+          info >> setName;
+          info >> nFaces;
+          sideSets_(i).first = setName;
+          getline(in,line);
+          istringstream faces(line);
+          for (int j = 0; j < nFaces; ++j ) {
+            int elem, face;
+            faces >> elem;
+            faces >> face;
+            std::pair<int,int> p(elem-1,face-1);
+            sideSets_(i).second.insert(p);
+          }
+        }
+        stringstream ss;
+        ss << "read " << nSideSets_ << " face sets";
+        ATC::LammpsInterface::instance()->print_msg_once(ss.str());
+      }
+      else if (section == "Elementsets") {
+        words >> nElemSets_;
+        elemSets_.reset(nElemSets_);
+        string infoline;
+        string setName;
+        int nNodes;
+        string line;
+        for (int i = 0; i < nElemSets_; ++i) {
+          getline(in,infoline);
+          istringstream info(infoline);
+          info >> setName;
+          info >> nNodes;
+          elemSets_(i).first = setName;
+          getline(in,line);
+          istringstream nodes(line);
+          for (int j = 0; j < nNodes; ++j ) {
+            int node;
+            nodes >> node;
+            elemSets_(i).second.insert(node-1);
+          }
+        }
+        stringstream ss;
+        ss << "read " << nElemSets_ << " element sets";
+        ATC::LammpsInterface::instance()->print_msg_once(ss.str());
       }
     }
     in.close();
-    if (nodeCoords_->size() == 0) {
+    if (nodeCoords_.size() == 0) {
       throw ATC_Error("Could not find mesh file, or mesh file empty.");
     }
   }
@@ -167,8 +226,8 @@ namespace ATC {
     float x[nNodes_], y[nNodes_], z[nNodes_];
     error = ex_get_coord (exoid, x, y, z);
     if (error > 0) { throw ATC_Error("problem with getting coordinates "+meshfile_); }
-    nodeCoords_->reset(nsd,nNodes_);
-    DENS_MAT & nodes = *nodeCoords_;
+    nodeCoords_.reset(nsd,nNodes_);
+    DENS_MAT & nodes = nodeCoords_;
     for (int i = 0; i < nNodes_; ++i) {
       nodes(0,i) = x[i];  // this is a float to double conversion 
       nodes(1,i) = y[i];  // this is a float to double conversion 
@@ -190,14 +249,14 @@ namespace ATC {
       lastType = etype;
     }
     int nVerts = number_of_vertices(elementType_);
-    conn_->reset(nVerts, nElements_);
+    conn_.reset(nVerts, nElements_);
     int n = 0;
     for (int i=0; i<nelemblk; i++) { 
       int bconn[nnpe[i]*nblkelem[i]];
       error = ex_get_elem_conn (exoid, blkIds[i], &bconn); 
       for (int j=0; j<nblkelem[i]; j++) { 
         for (int k=0; k<nnpe[i]; k++) { 
-          (*conn_)(k,n) = bconn[k+j*nnpe[i]]-1;
+          conn_(k,n) = bconn[k+j*nnpe[i]]-1;
         }
         n++;
       }
@@ -208,14 +267,14 @@ namespace ATC {
     error = ex_get_node_set_ids (exoid, nsetIds);
     int nnodes,ndist;
     //nodeSets_ = new Array< pair< string,set<int> > >();
-    nodeSets_->reset(nNodeSets_);
+    nodeSets_.reset(nNodeSets_);
     for (int i=0; i<nNodeSets_; i++) { 
-      (*nodeSets_)(i).first = to_string(nsetIds[i]);
+      nodeSets_(i).first = to_string(nsetIds[i]);
       error = ex_get_node_set_param (exoid, nsetIds[i], &nnodes, &ndist);
       int nodes[nnodes];
       error = ex_get_node_set (exoid, nsetIds[i], nodes);
       for (int j=0; j<nnodes; j++) { 
-        (*nodeSets_)(i).second.insert(nodes[j]-1);
+        nodeSets_(i).second.insert(nodes[j]-1);
       }
     }
     error = ex_close(exoid);

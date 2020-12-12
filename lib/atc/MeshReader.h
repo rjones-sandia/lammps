@@ -41,11 +41,16 @@ namespace ATC {
     int nNodes_;
     int nElements_;
     int nNodeSets_;
-    ATC_matrix::Array2D<int> * conn_;
-    DENS_MAT * nodeCoords_;
-    ATC_matrix::Array<std::pair<std::string,std::set<int> > > * nodeSets_;
+    int nSideSets_;
+    int nElemSets_;
+    ATC_matrix::Array2D<int> conn_;
+    DENS_MAT  nodeCoords_;
+    ATC_matrix::Array<std::pair<std::string,std::set<int> > >  nodeSets_;
+    ATC_matrix::Array<std::pair<std::string,std::set<std::pair<int,int> > > > sideSets_;
+    ATC_matrix::Array<std::pair<std::string,std::set<int> > > elemSets_;
+    double coordTol_;
   };
 
-} // end namespace ATC
+}; // end namespace ATC
 
 #endif

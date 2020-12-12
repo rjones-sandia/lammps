@@ -19,6 +19,9 @@ using std::map;
 using std::pair;
 using std::set;
 
+static const double kTol_ = 1.0e-8; 
+static const double tol_sparse = 1.e-30;//tolerance for compaction from dense
+
 namespace ATC {
 
   //--------------------------------------------------------
@@ -144,7 +147,7 @@ namespace ATC {
       }
     }
 
-    /** switch to account for short range interfaces */
+    /** switch to account for short range interaces */
     else if (strcmp(arg[argIndx],"short_range")==0) {
       argIndx++;
       if (strcmp(arg[argIndx],"on")==0) {
@@ -689,9 +692,9 @@ namespace ATC {
         
         for (int jj = 0; jj < jnum; jj++) {
           int j = jlist[jj];
+          LammpsInterface::instance()->neighbor_remap(j);
           if (mask[j] & atc_->groupbit_) {
             //double factor_coul = LammpsInterface::instance()->coulomb_factor(j);
-            LammpsInterface::instance()->neighbor_remap(j);
 
             double delx = xtmp - xatom[j][0];
             double dely = ytmp - xatom[j][1];
@@ -827,7 +830,7 @@ namespace ATC {
   //  apply_charged_surfaces
   //--------------------------------------------------------
   void ExtrinsicModelElectrostatic::apply_charged_surfaces
-  (MATRIX & /* potential */)
+    (MATRIX & potential)
   {
     //double qE2f = LammpsInterface::instance()->qe2f();
     double qV2e = LammpsInterface::instance()->qv2e();

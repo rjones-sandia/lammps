@@ -47,7 +47,7 @@ const double kMinScale_ = 10000.;
   //    parses and adjusts charge regulator state based on
   //    user input, in the style of LAMMPS user input
   //--------------------------------------------------------
-  bool ConcentrationRegulator::modify(int /* narg */, char ** /* arg */)
+  bool ConcentrationRegulator::modify(int narg, char **arg)
   {
     bool foundMatch = false;
     return foundMatch;
@@ -166,7 +166,7 @@ const double kMinScale_ = 10000.;
   //--------------------------------------------------------
   //  size vector
   //--------------------------------------------------------
-  int ConcentrationRegulator::size_vector(int /* i */) const
+  int ConcentrationRegulator::size_vector(int i) const
   {
     int n = (regulators_.size())*5; 
     if (n==0) n = 20; 
@@ -208,6 +208,11 @@ const double kMinScale_ = 10000.;
         maxExchanges_(p.maxExchanges),
         maxAttempts_(p.maxAttempts),
         nexchanges_(0),
+        napplications_(0),
+        controlAverage_(p.controlAverage),
+        sampleAverage_(p.sampleAverage),
+        sumExcess_(0),
+        nsamples_(0),
         initialized_(false),
         _rngUniformCounter_(0),
         _rngNormalCounter_(0)
@@ -219,6 +224,7 @@ const double kMinScale_ = 10000.;
     double m = li->atom_mass(controlType_);
     sigma_ = sqrt(kB/m); // v / sqrt(T)
     randomNumberGenerator_ = li->random_number_generator();
+    if (sampleAverage_ == 0) { sampleAverage_  = frequency_; }
   }
 
   //--------------------------------------------------------
@@ -226,17 +232,6 @@ const double kMinScale_ = 10000.;
   //--------------------------------------------------------
   void ConcentrationRegulatorMethodTransition::initialize(void)
   {
-#ifdef ATC_VERBOSE
-    lammpsInterface_->print_msg_once(
-      "\ncontrol type: "+to_string(controlType_)+
-      "\ntransistion type:"+to_string(transitionType_)+
-      "\ncontrol mask:"+to_string(controlMask_)+
-      "\nfrequency:"+to_string(frequency_)+
-      "\nmax exchanges:"+to_string(maxExchanges_)+
-      "\nmax attempts:"+to_string(maxAttempts_)+
-      "\nmax energy:"+to_string(maxEnergy_)
-    );
-#endif
     interscaleManager_ = &(atc_->interscale_manager());
 
     PerAtomQuantity<int> * a2el = atc_->atom_to_element_map();
@@ -245,7 +240,7 @@ const double kMinScale_ = 10000.;
     nNodes_ = atc_->num_nodes();
     DENS_MAT conc(nNodes_,1); conc = targetConcentration_;
     DENS_VEC integral = atc_->fe_engine()->integrate(conc,elemset_);
-    targetCount_ = rnd(integral(0)) ;
+    targetCount_ = rnd(integral(0));
 
     volumes_.resize(elemset_.size());
     ESET::const_iterator itr;
@@ -263,18 +258,29 @@ const double kMinScale_ = 10000.;
       volumes_(i) += volumes_(i-1);
     } 
 
-    // record original energetic properties
+    // record orginal energetic properties
     int ntypes = lammpsInterface_->ntypes();
     epsilon0_.reset(ntypes);
     p_ = lammpsInterface_->potential();
     lammpsInterface_->epsilons(controlType_,p_,epsilon0_.ptr());
     
 #ifdef ATC_VERBOSE
-    string msg = "type "+to_string(controlType_)+" target count " + to_string(targetCount_);
-    msg += " volume " + to_string(V_);
-    msg += " current count " + to_string(count());
-    ATC::LammpsInterface::instance()->print_msg_once(msg);
-    msg = "WARNING: ensure neighboring happens at least every "+to_string(frequency_);
+    lammpsInterface_->print_msg_once(
+      "concentration control volume:"+ to_string(V_)+
+      "\ncontrol type:    "+to_string(controlType_)   +" epsilon:"+to_string(epsilon0_(controlType_-1))+
+      "\ntransistion type:"+to_string(transitionType_)+" epsilon:"+to_string(epsilon0_(transitionType_-1))+
+      "\ncontrol charge:"+to_string(q0_)+
+      "\ncontrol mask:"+to_string(controlMask_)+
+      "\nfrequency:"+to_string(frequency_)+
+      "\nmax exchanges:"+to_string(maxExchanges_)+
+      "\nmax attempts:"+to_string(maxAttempts_)+
+      "\nmax energy:"+to_string(maxEnergy_)
+    );
+//  string msg = "type "+to_string(controlType_)+" target count " + to_string(targetCount_);
+//  msg += " volume " + to_string(V_);
+//  msg += " current count " + to_string(count());
+//  ATC::LammpsInterface::instance()->print_msg_once(msg);
+    string msg = "WARNING: ensure neighboring happens at least every "+to_string(frequency_);
     ATC::LammpsInterface::instance()->print_msg_once(msg);
 #endif
   }
@@ -291,9 +297,27 @@ const double kMinScale_ = 10000.;
   //--------------------------------------------------------
   void ConcentrationRegulatorMethodTransition::pre_exchange(void)
   {
+    int cnt = 0;
+    int nexcess = 0;
+    if ( lammpsInterface_->now(sampleAverage_)) {
+      cnt = count();
+      nexcess = cnt - targetCount_;
+      sumExcess_ += nexcess;
+      nsamples_++;
+//std::cout << "!!! " << nsamples_ << " " << nexcess << " " << sumExcess_ << "\n";
+    }
     // return if should not be called on this timestep
     if ( ! lammpsInterface_->now(frequency_)) return;
-    nexchanges_ = excess();
+    napplications_++;
+    double aveExcess = double(sumExcess_)/nsamples_;
+    if (controlAverage_) nexcess = aveExcess;
+    nexchanges_ = max(min(nexcess,maxExchanges_),-maxExchanges_);
+#ifdef ATC_VERBOSE
+    lammpsInterface_->print_msg("type "+to_string(controlType_)
+      +" count: " + to_string(cnt) + " - " + to_string(targetCount_)
+      +" ave_excess: " + to_string(aveExcess) 
+      +" expected_exchanges: "+to_string(nexchanges_));
+#endif
     int  n = abs(nexchanges_); 
     bool success = false;
     if      (nexchanges_ > 0) { success = delete_atoms(n); }
@@ -319,7 +343,7 @@ const double kMinScale_ = 10000.;
   //--------------------------------------------------------
   //  accept
   //--------------------------------------------------------
-  bool ConcentrationRegulatorMethodTransition::accept(double energy, double /* T */) const 
+  bool ConcentrationRegulatorMethodTransition::accept(double energy, double T) const 
   { 
 #ifdef ATC_VERBOSE2
     if (energy < maxEnergy_) lammpsInterface_->print_msg(" energy "+to_string(energy)+" "+to_string(rngCounter_));
@@ -345,7 +369,7 @@ const double kMinScale_ = 10000.;
     double e = lammpsInterface_->shortrange_energy(x,controlType_,maxEnergy_);
 #ifdef ATC_VERBOSE
 {
-    lammpsInterface_->print_msg(to_string(controlType_)+" insertion energy "+to_string(e)+" x "+to_string(x[0])+","+to_string(x[1])+","+to_string(x[2])+" "+to_string(_rngUniformCounter_)+":"+to_string(_rngNormalCounter_));
+    lammpsInterface_->print_msg(to_string(controlType_)+" insertion_energy: "+to_string(e)+" x:( "+to_string(x[0])+","+to_string(x[1])+","+to_string(x[2])+") counts: "+to_string(_rngUniformCounter_)+":"+to_string(_rngNormalCounter_));
 }
 #endif
     return e;
@@ -393,10 +417,11 @@ const double kMinScale_ = 10000.;
     }
 #ifdef ATC_VERBOSE
       string c = to_string(controlType_);
-      lammpsInterface_->all_print(attempts, c+"-attempts  ");
-      lammpsInterface_->all_print(deletions,c+" deletions ");
-      lammpsInterface_->all_print(_rngUniformCounter_,c+" RNG-uniform  ");
-      lammpsInterface_->all_print(_rngNormalCounter_,c+" RNG-normal  ");
+      lammpsInterface_->print_msg(c+" deletions: "+to_string(deletions)+"/"+to_string(n)+" attempts: "+to_string(attempts));
+//    lammpsInterface_->all_print(attempts, c+"-attempts  ");
+//    lammpsInterface_->all_print(deletions,c+" deletions ");
+//    lammpsInterface_->all_print(_rngUniformCounter_,c+" RNG-uniform  ");
+//    lammpsInterface_->all_print(_rngNormalCounter_,c+" RNG-normal  ");
 //    lammpsInterface_->all_print(uniform()," RANDOM ");
 #endif
     return (n == deletions); // success
@@ -496,9 +521,9 @@ Tv(0) = 300.;
       additions = lammpsInterface_->int_allmax(additions);
 #ifdef ATC_VERBOSE
 {
-      string c = to_string(controlType_);
-      lammpsInterface_->all_print(_rngUniformCounter_,c+" rng-uniform  ");
-      lammpsInterface_->all_print(_rngNormalCounter_,c+" rng-normal  ");
+//    string c = to_string(controlType_);
+//    lammpsInterface_->all_print(_rngUniformCounter_,c+" rng-uniform  ");
+//    lammpsInterface_->all_print(_rngNormalCounter_,c+" rng-normal  ");
 //    lammpsInterface_->all_print(uniform()," random ");
 }
 #endif
@@ -509,10 +534,11 @@ Tv(0) = 300.;
 #ifdef ATC_VERBOSE
 {
       string c = to_string(controlType_);
-      lammpsInterface_->all_print(attempts, c+"+attempts  ");
-      lammpsInterface_->all_print(additions,c+" additions ");
-      lammpsInterface_->all_print(_rngUniformCounter_,c+" RNG-uniform  ");
-      lammpsInterface_->all_print(_rngNormalCounter_,c+" RNG-normal  ");
+      lammpsInterface_->print_msg(c+" additions: "+to_string(additions)+"/"+to_string(n)+" attempts: "+to_string(attempts));
+//    lammpsInterface_->all_print(attempts, c+" attempts  ");
+//    lammpsInterface_->all_print(additions,c+" additions ");
+//    lammpsInterface_->all_print(_rngUniformCounter_,c+" RNG-uniform  ");
+//    lammpsInterface_->all_print(_rngNormalCounter_,c+" RNG-normal  ");
 //    lammpsInterface_->all_print(uniform()," RANDOM ");
 }
 #endif
@@ -607,16 +633,25 @@ Tv(0) = 300.;
     }
     else if (transitionCounter_==transitionInterval_) {
       nInTransition_ -= lammpsInterface_->change_type(transitionType_,controlType_);
+//ifdef ATC_PRINT_DEBUGGING
+#ifdef ATC_VERBOSE
+      lammpsInterface_->print_msg("returning type "+to_string(transitionType_)+" to "+to_string(controlType_)+" in trans:"+to_string(nInTransition_));
+#endif
     }
     else {
       transitionFactor_ = insertion_factor(transitionCounter_);
       if (nInTransition_ < 0) transitionFactor_ = 1-transitionFactor_;
-      double q = 0; 
+      double q = transitionFactor_*q0_;
       lammpsInterface_->set_charge(transitionType_,q);
       DENS_VEC eps = epsilon0_;
-      
+      eps *= transitionFactor_; 
       lammpsInterface_->set_epsilons(transitionType_,p_,eps.ptr());
       lammpsInterface_->pair_reinit(); // epsilon
+//ifdef ATC_PRINT_DEBUGGING
+#ifdef ATC_VERBOSE
+      if (nInTransition_>0)
+      lammpsInterface_->print_msg(to_string(transitionCounter_)+" transitioning "+to_string(nInTransition_)+" atoms, type "+to_string(transitionType_)+" -->  "+to_string(controlType_)+" scale "+to_string(transitionFactor_));
+#endif
     }
   }
   //--------------------------------------------------------

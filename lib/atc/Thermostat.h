@@ -56,6 +56,10 @@ namespace ATC {
     /** maximum number of iterations used in iterative solve for lambda */
     int lambdaMaxIterations_;
 
+    /** data for region-masked thermostat */
+    ESET elemset_;
+    double target_;
+
   private:
     
     // DO NOT define this
@@ -128,7 +132,7 @@ namespace ATC {
     virtual void apply_post_corrector(double dt);
 
     /** compute boundary flux, requires thermostat input since it is part of the coupling scheme */
-    virtual void compute_boundary_flux(FIELDS & /* fields */)
+    virtual void compute_boundary_flux(FIELDS & fields)
       {boundaryFlux_[TEMPERATURE] = 0.;};
 
     /** get data for output */
@@ -161,6 +165,52 @@ namespace ATC {
 
     // DO NOT define this
     ThermostatRescale();
+  
+  };
+
+  /**
+   *  @class  ThermostatRescaleRegion
+   *  @brief  Enforces constraint on atomic kinetic energy based on FE temperature in a region/elementset
+   */
+  
+  class ThermostatRescaleRegion : public RegulatorMethod {
+  
+  public:
+
+    ThermostatRescaleRegion(AtomicRegulator * thermostat, ESET eset, double temperature);
+        
+    virtual ~ThermostatRescaleRegion() {};
+
+    /** instantiate all needed data */
+    virtual void construct_transfers();
+        
+    /** applies thermostat to atoms in the post-corrector phase */
+    virtual void apply_post_corrector(double dt);
+
+    /** compute boundary flux, requires thermostat input since it is part of the coupling scheme */
+    virtual void compute_boundary_flux(FIELDS & fields)
+      {boundaryFlux_[TEMPERATURE] = 0.;};
+
+    /** get data for output */
+    virtual void output(OUTPUT_LIST & outputData) {};
+        
+  protected:
+
+    /** region (mask) defined by element set */
+    ESET eset_;
+
+    /** target temperature */
+    double temperature_;
+
+    class LammpsInterface * lammpsInterface_;
+
+    /** id list */
+    class AtomInElementSet * list_;
+
+  private:
+
+    // DO NOT define this
+    ThermostatRescaleRegion();
   
   };
 
@@ -540,7 +590,7 @@ namespace ATC {
     virtual void apply_post_corrector(double dt);
 
     /** compute boundary flux, requires thermostat input since it is part of the coupling scheme */
-    virtual void compute_boundary_flux(FIELDS & /* fields */)
+    virtual void compute_boundary_flux(FIELDS & fields)
       {boundaryFlux_[TEMPERATURE] = 0.;};
 
     /** determine if local shape function matrices are needed */
@@ -581,7 +631,7 @@ namespace ATC {
     /** change in restricted atomic FE energy over a timestep */
     DENS_MAT deltaNodalAtomicEnergy_;
 
-    /** initial restricted atomic FE energy used to compute change */
+    /** intial restricted atomic FE energy used to compute change */
     DENS_MAT initialNodalAtomicEnergy_;
 
     /** filtered nodal atomic energy */
@@ -917,7 +967,7 @@ namespace ATC {
     virtual void finish() {};
 
     /** compute boundary flux, requires thermostat input since it is part of the coupling scheme */
-    virtual void compute_boundary_flux(FIELDS & /* fields */)
+    virtual void compute_boundary_flux(FIELDS & fields)
       {boundaryFlux_[TEMPERATURE] = 0.;};
 
   protected:
@@ -1022,7 +1072,7 @@ namespace ATC {
     virtual void finish() {};
     
     /** compute boundary flux, requires thermostat input since it is part of the coupling scheme */
-    virtual void compute_boundary_flux(FIELDS & /* fields */)
+    virtual void compute_boundary_flux(FIELDS & fields)
       {boundaryFlux_[TEMPERATURE] = 0.;};
 
   protected:

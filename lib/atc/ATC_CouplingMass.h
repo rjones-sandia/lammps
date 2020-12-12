@@ -81,6 +81,10 @@ namespace ATC {
     
     
     //      i.e. we only need the correct shape function matrix for restriction
+    
+    /** manager for regulator */
+    AtomicRegulator * thermostat_;;
+
   };
 
 };

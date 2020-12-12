@@ -8,6 +8,8 @@
 #include "PoissonSolver.h"
 #include "ChargeRegulator.h"
 #include "ConcentrationRegulator.h"
+#include "Thermostat.h"
+#include "ThermalTimeIntegrator.h"
 #include "PerAtomQuantityLibrary.h"
 #include "TransferOperator.h"
 #include "AtomToMoleculeTransfer.h"
@@ -41,7 +43,8 @@ namespace ATC {
                                      string matParamFile,
                                      ExtrinsicModelType extrinsicModel)
     : ATC_Coupling(groupName,perAtomArray,thisFix),
-      resetNlocal_(false)
+      resetNlocal_(false),
+      thermostat_(nullptr)
   {
     // Allocate PhysicsModel 
     create_physics_model(SPECIES, matParamFile); 
@@ -61,6 +64,7 @@ namespace ATC {
 
     // regulator
     atomicRegulator_ = new ConcentrationRegulator(this);
+    atomicRegulators_.push_back(atomicRegulator_);
 
     // set up physics specific time integrator
     //WIP_JAT should be species concentration
@@ -102,6 +106,14 @@ namespace ATC {
       if (strcmp(arg[argIndex],"concentration")==0) {
         argIndex++;
         match = atomicRegulator_->modify(narg-argIndex,&arg[argIndex]);
+      }
+      else if (strcmp(arg[argIndex],"thermal")==0) {
+        //argIndex++;
+        thermostat_ = new Thermostat(this);
+        atomicRegulators_.push_back(thermostat_);
+        match = thermostat_->modify(narg-argIndex,&arg[argIndex]);
+        temperatureDef_ = KINETIC;
+        timeIntegrators_[TEMPERATURE] = new ThermalTimeIntegrator(this,TimeIntegrator::NONE);
       }
     }
     // no match, call base class parser
@@ -176,6 +188,11 @@ namespace ATC {
     for (_tiIt_ = timeIntegrators_.begin(); _tiIt_ != timeIntegrators_.end(); ++_tiIt_) {
       (_tiIt_->second)->construct_transfers();
     }
+    atomicRegulator_->construct_transfers();
+    if (thermostat_) {
+      thermostat_->construct_methods(); 
+      thermostat_->construct_transfers(); 
+    }
   }
 
   void ATC_CouplingMass::init_filter()
@@ -221,7 +238,7 @@ namespace ATC {
         (_tiIt_->second)->post_process();
       }
 
-      // auxiliary data
+      // auxilliary data
       for (_tiIt_ = timeIntegrators_.begin(); _tiIt_ != timeIntegrators_.end(); ++_tiIt_) {
         (_tiIt_->second)->output(outputData);
       }

@@ -13,7 +13,7 @@
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
-#include <cmath>
+#include "math.h"
 
 #include "ATC_Error.h"
 
@@ -70,6 +70,12 @@ namespace ATC_Utility
   }
   inline double nudge_up(double x)   { return x+tolerance(x); }
   inline double nudge_down(double x) { return x-tolerance(x); }
+  inline int parse_direction(const char * arg) {
+    if      (std::strcmp(arg,"x") == 0)  return 0;
+    else if (std::strcmp(arg,"y") == 0)  return 1;
+    else if (std::strcmp(arg,"z") == 0)  return 2;
+    else return -1; 
+  }
   inline double parse_min(const char * arg) {
     if      (std::strcmp(arg,"INF") == 0)  return -parsebig_;
     else if (std::strcmp(arg,"-INF") == 0) return -parsebig_;
@@ -204,9 +210,8 @@ namespace ATC_Utility
   {
     double v;
     std::istringstream in(s);
-    in >> v;
-    // in.good() == true indicates, that not the whole string was converted.
-    return !(in.fail() || in.good());
+    (in >> v);
+    return !(in.fail());
   }
 
   /** convert a string to anything that has iostream::>> defined, second arg is to disambibuate type */
@@ -214,7 +219,7 @@ namespace ATC_Utility
   inline T str2T(const std::string &s, T v)
   {
     std::istringstream in(s);
-    if (!(in >> v)) throw ATC::ATC_Error("str2T invalid string conversion");
+    if (!(in >> v)) throw ATC::ATC_Error("str2T invalid string conversion for "+s);
     return v;
   }
 

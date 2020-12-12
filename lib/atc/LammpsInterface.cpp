@@ -21,7 +21,8 @@
 #include "neigh_list.h" // neighbor list
 #include "update.h" // timestepping information
 #include "pair.h" // pair potentials
-#include "MANYBODY/pair_eam.h" // pair potentials
+//#include "MANYBODY/pair_eam.h" // pair potentials
+#include "pair_eam.h" // pair potentials
 #include "lattice.h" // lattice parameters
 #include "bond.h" // bond potentials
 #include "comm.h" //
@@ -46,6 +47,7 @@ using std::map;
 using std::pair;
 using std::string;
 using std::set;
+using std::vector;
 using LAMMPS_NS::bigint;
 
 namespace ATC {
@@ -90,6 +92,8 @@ LammpsInterface::LammpsInterface()
     commRank_(0),
     atomPE_(nullptr),
     refBoxIsSet_(false),
+    naCell_(1),
+    numPerType_(nullptr),
     random_(nullptr),
     globalrandom_(nullptr)
 {
@@ -131,15 +135,15 @@ void LammpsInterface::sparse_allsum(SparseMatrix<double> &toShare) const
   if (error != MPI_SUCCESS) throw ATC_Error("error in sparse_allsum_numrows "+to_string(error));
 
   // adjust row sendcounts because recRowsCRS is off by one
-  int *rowCounts = new int[nProcs];
-  int *sizeCounts = new int[nProcs];
+  int rowCounts[nProcs];
+  int sizeCounts[nProcs];
   // set up total size of receive buffers for Allgatherv calls
   int totalRowsCRS = 0;
   int totalSize = 0;
   // set up array of displacements for Allgatherv calls
-  int *rowOffsets = new int[nProcs];
+  int rowOffsets[nProcs];
   rowOffsets[0] = 0;
-  int *sizeOffsets = new int[nProcs];
+  int sizeOffsets[nProcs];
   sizeOffsets[0] = 0;
   for (int i = 0; i < nProcs; i++) {
     // find the total number of entries to share in the mpi calls below
@@ -156,8 +160,8 @@ void LammpsInterface::sparse_allsum(SparseMatrix<double> &toShare) const
   // get actual rows
   INDEX *rec_ia = new INDEX[totalRowsCRS];
   if (toShare.size() == 0) {
-    double dummy;
-    error = MPI_Allgatherv(&dummy, 0, MPI_INT,
+    double dummy[0];
+    error = MPI_Allgatherv(dummy, 0, MPI_INT,
                            rec_ia, rowCounts, rowOffsets, MPI_INT, lammps_->world);
   }
   else
@@ -211,10 +215,6 @@ void LammpsInterface::sparse_allsum(SparseMatrix<double> &toShare) const
       toShare += tempMat;
     }
   }
-  delete[] rowCounts;
-  delete[] sizeCounts;
-  delete[] rowOffsets;
-  delete[] sizeOffsets;
 
   delete[] recInfo;
   delete[] rec_ia;
@@ -239,7 +239,6 @@ std::string LammpsInterface::read_file(std::string filename) const
     eof = lammps_->comm->read_lines_from_file(fp,1,MAXLINE,buffer);
     s << buffer;
   }
-  fclose(fp);
   delete [] buffer;
   return s.str(); // can't copy the stream itself
 }
@@ -494,6 +493,18 @@ void LammpsInterface::set_reference_box(void) const
   refBoxIsSet_ = true;
 }
 
+void LammpsInterface::set_atoms_per_unit_cell(int* na) const 
+{
+  int n = ntypes();
+  naCell_ = 0;
+  numPerType_ = new int(n);
+  for (int i = 0; i < n; ++i) {
+    numPerType_[i] = na[i];
+    naCell_ += na[i];
+  }
+  print_msg_once("set atoms per cell to: "+to_string(naCell_));
+}
+
 
 double LammpsInterface::domain_xprd() const { return lammps_->domain->xprd; }
 
@@ -542,16 +553,25 @@ bool LammpsInterface::region_bounds(const char * regionName,
   double & zmin, double & zmax,
   double & xscale, double & yscale, double & zscale) const
 {
+  double BIG = 1.e19;
+  double xlo,xhi,ylo,yhi,zlo,zhi;
+  box_bounds(xlo,xhi,ylo,yhi,zlo,zhi);
   int iRegion = region_id(regionName);
   xscale = region_xscale(iRegion);
   yscale = region_yscale(iRegion);
   zscale = region_zscale(iRegion);
   xmin = region_xlo(iRegion); 
+  if (fabs(xmin) > BIG) xmin = xlo; // hande INFs
   xmax = region_xhi(iRegion);
+  if (fabs(xmax) > BIG) xmax = xhi;
   ymin = region_ylo(iRegion); 
+  if (fabs(ymin) > BIG) ymin = ylo;
   ymax = region_yhi(iRegion);
+  if (fabs(ymax) > BIG) ymax = yhi;
   zmin = region_zlo(iRegion); 
+  if (fabs(zmin) > BIG) zmin = zlo;
   zmax = region_zhi(iRegion);
+  if (fabs(zmax) > BIG) zmax = zhi;
   if (strcmp(region_style(iRegion),"block")==0) { return true; }
   else                                          { return false; }
 }
@@ -631,7 +651,7 @@ LammpsInterface::LatticeType LammpsInterface::lattice_style() const
     throw ATC_Error("Lattice has not been defined");
 }
 
-//* returns the number of basis vectors
+//* retuns the number of basis vectors 
 int LammpsInterface::n_basis() const
 {
   return lammps_->domain->lattice->nbasis;
@@ -721,11 +741,12 @@ int LammpsInterface::num_atoms_per_cell(void) const
   if      (type == LammpsInterface::SC)  naCell = 1;
   else if (type == LammpsInterface::BCC) naCell = 2;
   else if (type == LammpsInterface::FCC) naCell = 4;
+  else if (type == LammpsInterface::HCP) naCell = 4;
   else if (type == LammpsInterface::DIAMOND) naCell = 8;
   else if (comm_rank()==0) {
     //{throw ATC_Error("lattice style not currently supported by ATC");}
-    print_msg_once("WARNING:  Cannot get number of atoms per cell from lattice");
-    naCell = 1; 
+    naCell = naCell_; 
+    print_msg_once("WARNING: Cannot get number of atoms per cell from lattice, using "+to_string(naCell)+" if this is inappropriate use: set atoms_per_unit_cell or mass_density | heat_capacity basis");
   }
   return naCell;
 }
@@ -902,7 +923,7 @@ int LammpsInterface::reset_ghosts(int deln) const
 
 //* energy for interactions within the shortrange cutoff
 double LammpsInterface::shortrange_energy(double *coord, 
-                                          int itype, int id, double /* max */) const
+  int itype, int id, double max) const
 {
   LAMMPS_NS::Atom * atom  = lammps_->atom;
   double **x = atom->x;
@@ -1092,7 +1113,8 @@ double LammpsInterface::hbar() const  {
   return hbar;
 }
 
-//* Dulong-Petit heat capacity
+//* Dulong-Petit heat capacity  (per volume)
+//   3 k_B n = rho c --> c = 3 k_B n/rho = 3 k_B / bar{m}
 double LammpsInterface::heat_capacity() const  { 
   double rhoCp = dimension()*kBoltzmann()/volume_per_atom();
   return rhoCp;
@@ -1100,37 +1122,34 @@ double LammpsInterface::heat_capacity() const  {
 
 //* reference mass density for a *unit cell*
 // all that is needed is a unit cell: volume, types, mass per type
-double LammpsInterface::mass_density(int* numPerType) const  
+double LammpsInterface::mass_density() const  
 { 
   const double *mass         = lammps_->atom->mass;
   if (!mass) throw ATC_Error("cannot compute a mass density: no mass");
-  const int    ntypes        = lammps_->atom->ntypes;
   const int    *mass_setflag = lammps_->atom->mass_setflag;
-  const int    *type         = lammps_->atom->type;
+  if (!mass_setflag[1]) { throw ATC_Error("cannot compute a mass density: no per type mass set"); }
+  const int    ntypes        = lammps_->atom->ntypes;
   double naCell = num_atoms_per_cell();
   double vol = volume_per_atom();
-  if (numPerType) {
+  if (numPerType_) {
     double m = 0.0;
     double n = 0;
     for (int i = 0; i < ntypes; i++) {
-       m += numPerType[i]*mass[i+1];
-       n += numPerType[i];
+       m += numPerType_[i]*mass[i+1];
+       n += numPerType_[i];
     }
-    if (n>naCell) throw ATC_Error("cannot compute a mass density: too many basis atoms");
+    if (n< naCell || n>naCell) throw ATC_Error("cannot compute a mass density: basis atom mismatch");
     return m/n/vol;
   }
   // since basis->type map not stored only monatomic lattices are automatic
   // if not given a basis try to guess
   else {
-    if (ntypes == 1) {
-      if ((this->natoms()==0) && mass_setflag[1]) {
-        return mass[1]/vol;
-      }
-      else {
-        if (type)                 return mass[type[0]]/vol;
-        else if (mass_setflag[1]) return mass[1]/vol;
-      }
+    double m = mass[1]; 
+    bool same = true;
+    for (int i = 1; i < ntypes; i++) { 
+      if (fabs(mass[i+1]-m) > 1.e-12) { same = false; break; }
     }
+    if (same) { return m/vol; }
   }
   throw ATC_Error("cannot compute a mass density");
   return 0.0;
@@ -1293,7 +1312,7 @@ int LammpsInterface::nsteps() const    { return lammps_->update->nsteps; }
 
 int LammpsInterface::sbmask(int j) const {return j >> SBBITS & 3; }
 
-void LammpsInterface::set_list(int /* id */, LAMMPS_NS::NeighList *ptr) { list_ = ptr; }
+void LammpsInterface::set_list(int id, LAMMPS_NS::NeighList *ptr) { list_ = ptr; }
 
 int   LammpsInterface::neighbor_list_inum() const { return list_->inum; }
 
@@ -1466,18 +1485,33 @@ LAMMPS_NS::Compute * LammpsInterface::const_to_active(COMPUTE_POINTER computePoi
 //  compute pe/atom interface methods 
 //  - the only compute "owned" by ATC
 // -----------------------------------------------------------------
-int  LammpsInterface::create_compute_pe_peratom(void)  const
+int  LammpsInterface::create_compute_pe_peratom(vector<string> * types) 
 {
-  char **list = new char*[4];
+  stringstream ss;
+  int narg = 3;
+  int nopt = 0;
+  if (types != nullptr) { 
+    nopt = types->size();
+    narg += nopt;
+  }
+  atomPeNameBase_ = "atcPE"; 
   string atomPeName = compute_pe_name();
+  char **list = new char*[narg];
   list[0] = (char *) atomPeName.c_str();
   list[1] = (char *) "all"; 
   list[2] = (char *) "pe/atom";
-  list[3] = (char *) "pair";
-
+  for (int i = 0; i < nopt; ++i) {
+    list[3+i] = (char *) (*types)[i].c_str();
+  }
   int icompute = lammps_->modify->find_compute(list[0]);
-  if (icompute < 0) {
-    lammps_->modify->add_compute(4,list);
+/*
+  if (icompute > -1) {
+    ss << "peratom PE compute exists, deleting, ";
+    lammps_->modify->delete_compute(list[0]);
+  }
+*/
+  if (icompute < 0) { // two or more ATC's active
+    lammps_->modify->add_compute(narg,list);
     icompute = lammps_->modify->find_compute(list[0]);
   }
   delete [] list;
@@ -1485,7 +1519,6 @@ int  LammpsInterface::create_compute_pe_peratom(void)  const
     atomPE_ = lammps_->modify->compute[icompute];
   }
   computePointers_.insert(atomPE_);
-  stringstream ss;
   ss << "peratom PE compute created with ID: " << icompute;
   ATC::LammpsInterface::instance()->print_msg_once(ss.str());
   return icompute;

@@ -126,9 +126,7 @@ namespace ATC {
     interscaleManager_.set_lammps_data_prefix();
     grow_arrays(lammpsInterface_->nmax());
     feEngine_ = new FE_Engine(lammpsInterface_->world());
-
-    
-    lammpsInterface_->create_compute_pe_peratom();
+    lammpsInterface_->create_compute_pe_peratom(); 
   }
 
   ATC_Method::~ATC_Method()
@@ -356,6 +354,35 @@ pecified
           }
         }
 
+       // 
+       /*!
+         fix_modify_AtC output mask <nodeset>
+       */
+        else if (strcmp(arg[argIdx],"mask")==0) {
+          argIdx++;
+          string nset = arg[argIdx++];
+          set<int> nodeSet = (feEngine_->fe_mesh())->nodeset(nset);
+          if (! feEngine_->output_manager() ) {
+            throw ATC_Error(" create output first "); 
+          }
+          feEngine_->output_manager()->set_option(NODESET_MASK,nodeSet);
+          match = true;
+        }
+
+       // 
+       /*!
+         fix_modify_AtC output stride <int>
+       */
+        else if (strcmp(arg[argIdx],"stride")==0) {
+          argIdx++;
+          int stride = atoi(arg[argIdx++]);
+          if (! feEngine_->output_manager() ) {
+            throw ATC_Error(" create output first "); 
+          }
+          feEngine_->output_manager()->set_option(STRIDE,stride);
+          match = true;
+        }
+
       /*! \page man_boundary_integral fix_modify AtC output boundary_integral 
         \section syntax
         fix_modify AtC output boundary_integral [field] faceset [name]
@@ -442,6 +469,21 @@ pecified
           match = true;
         }
 
+      /*! \page man_output_now  fix_modify AtC output now
+        \section syntax
+        fix_modify AtC output now [dt]
+        - dt (float) = optional increment to ATC time
+        \section examples
+        <TT> fix_modify AtC output now </TT> \n
+        \section description
+        Forces output at current step
+        \section restrictions
+        \section related 
+        see \ref man_fix_atc
+        \section default 
+          dt = 1.0 
+        none
+      */
         else if (strcmp(arg[argIdx],"now")==0) {
           argIdx++;
           double dt = 1.0;
@@ -455,23 +497,24 @@ pecified
           outputNow_ = false;
           match = true;
         }
-        else 
-          if (strcmp(arg[argIdx],"index")==0) {
-            argIdx++;
-            if (strcmp(arg[argIdx],"step")==0) { outputTime_ = false; }
-            else                               { outputTime_ = true; }
+        else if (strcmp(arg[argIdx],"index")==0) {
+          argIdx++;
+          if (strcmp(arg[argIdx],"step")==0) { outputTime_ = false; }
+          else                               { outputTime_ = true; }
           match = true;
         }
         else {
           outputPrefix_ = arg[argIdx++];
           outputFrequency_ = atoi(arg[argIdx++]);
           bool ensight_output = false, full_text_output = false;
-          bool text_output = false, vect_comp = false, tensor_comp = false;
+          bool text_output = false, vtk_output = false;
+          bool vect_comp = false, tensor_comp = false;
           int rank = lammpsInterface_->comm_rank();
           for (int i = argIdx; i<narg; ++i) {
             if      (strcmp(arg[i],"full_text")==0) full_text_output = true;
             else if (strcmp(arg[i],"text")==0)           text_output = true;
             else if (strcmp(arg[i],"binary")==0)      ensight_output = true;
+            else if (strcmp(arg[i],"vtk")==0)      vtk_output = true;
             else if (strcmp(arg[i],"vector_components")==0) vect_comp = true;
             else if (strcmp(arg[i],"tensor_components")==0) tensor_comp = true;
             else { throw ATC_Error(" output: unknown keyword ");  }
@@ -484,6 +527,7 @@ pecified
             if (full_text_output) otypes.insert(FULL_GNUPLOT);
             if (text_output)      otypes.insert(GNUPLOT);
             if (ensight_output)   otypes.insert(ENSIGHT);
+            if (vtk_output)       otypes.insert(VTK);
             if (ntracked() > 0) {
                string fstem = field_to_string(SPECIES_CONCENTRATION);
                string istem = field_to_intrinsic_name(SPECIES_CONCENTRATION);
@@ -508,6 +552,10 @@ pecified
           match = true;
         }
       }
+    // 
+    /*!
+      fix_modify_AtC write <field> <nodeset> <filename>
+    */
     else if (strcmp(arg[argIdx],"write")==0) {
       argIdx++;
       FieldName thisField;
@@ -693,12 +741,12 @@ pecified
       /*! \page man_boundary fix_modify AtC boundary 
         \section syntax
         fix_modify AtC boundary type <atom-type-id>
-        - <atom-type-id> = type id for atoms that represent a fictitious
+        - <atom-type-id> = type id for atoms that represent a ficticious
         boundary internal to the FE mesh
         \section examples
         <TT> fix_modify AtC boundary type ghost_atoms </TT>
         \section description
-        Command to define the atoms that represent the fictitious
+        Command to define the atoms that represent the ficticious 
         boundary internal to the FE mesh. For fully overlapped MD/FE 
         domains with periodic boundary conditions no boundary atoms should
         be defined.
@@ -1003,7 +1051,21 @@ pecified
           } 
           match = true;
         }
+        else if (strcmp(arg[argIdx],"atoms_per_unit_cell")==0) {
+          argIdx++;
+          int ntypes = LammpsInterface::instance()->ntypes();
+          if (narg-argIdx != ntypes) { 
+            throw ATC_Error("need to provide atoms/cell for each type");
+          }
+          int* na = new int(ntypes);
+          for (int i = 0; i < ntypes; ++i){
+            na[i] = atoi(arg[argIdx++]);
+          }
+          LammpsInterface::instance()->set_atoms_per_unit_cell(na);
+          match = true;
+        }
       } // end "set"
+
 
 
 
@@ -1233,6 +1295,7 @@ pecified
   //-------------------------------------------------------------------
   void ATC_Method::initialize()
   { 
+    LammpsInterface::instance()->print_msg_once("initializing");
     feEngine_->partition_mesh();
     // initialized_ is set to true by derived class initialize()
     // localStep_ is a counter within a run or minimize
@@ -1249,6 +1312,7 @@ pecified
 
     // 1c) periodicity and box bounds/lengths
     if (!initialized_) {
+      //lammpsInterface_->create_compute_pe_peratom(); // note can't seem to move here
       
       lammpsInterface_->box_periodicity(periodicity[0],
                                             periodicity[1],
@@ -1415,6 +1479,7 @@ pecified
     
     
     if (!initialized_) {
+      LammpsInterface::instance()->print_msg_once("resetting coarse-graining ");
       if (atomToElementMapType_ == EULERIAN) {
         FundamentalAtomQuantity * atomPositionsAll = interscaleManager_.fundamental_atom_quantity(LammpsInterface::ATOM_POSITION,ALL);
         ClonedAtomQuantity<double> * myAtomPositions =
@@ -2015,8 +2080,8 @@ pecified
       LammpsInterface::instance()->int_allmax(&send_size,&max_size);
 
       if (comm_rank == 0) {
-        int *intbuf = new int[max_size];
-        double *buf = new double[max_size];
+        int intbuf[max_size];
+        double buf[max_size];
         for (int iproc = 1; iproc < nprocs; iproc++) {
           LammpsInterface::instance()->int_recv(intbuf,max_size,iproc);
           LammpsInterface::instance()->recv(buf,max_size,iproc);
@@ -2024,19 +2089,15 @@ pecified
             out << intbuf[i] << "  " << buf[i] << "\n";
           }  
         }
-        delete[] intbuf;
-        delete[] buf;
       } else {
-        int *intbuf = new int[send_size];
-        double *buf = new double[send_size];
+        int intbuf[send_size];
+        double buf[send_size];
         for (int i = 0; i < send_size; i++) {
           intbuf[i] = id2tag[i];
           buf[i] = atomicVolumeMatrix(i,i);
         }
         LammpsInterface::instance()->int_send(intbuf,send_size);
         LammpsInterface::instance()->send(buf,send_size);
-        delete[] intbuf;
-        delete[] buf;
       }
     }
                 

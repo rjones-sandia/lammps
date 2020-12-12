@@ -1,11 +1,12 @@
 #include <string>
 #include <fstream>
-#include <cstdio>
+#include <stdio.h>
 #include <sstream>
 #include "OutputManager.h"
 #include "ATC_Error.h"
 #include "LammpsInterface.h"
 
+using ATC_Utility::to_string;
 using std::ofstream;
 using std::stringstream;
 using std::ios_base;
@@ -38,7 +39,6 @@ string* get_component_names(int type) { // HERE <<<<
    componentNames = tensor_component_names;
  return componentNames;
 }
-
              
 //-----------------------------------------------------------------------------
 //*
@@ -58,7 +58,9 @@ OutputManager::OutputManager(string outputPrefix, set<int> & otypes)
     vtkOutput_(otypes.count(VTK)),
     tensorToComponents_(false), // paraview does not support tensors
     vectorToComponents_(false),
-    warnTooManyCols_(true)
+    warnTooManyCols_(true),
+    hasNodesetMask_(false),
+    stride_(0)
 {}
 //-----------------------------------------------------------------------------
 //*
@@ -71,24 +73,38 @@ OutputManager::OutputManager()
     coordinates_(nullptr),
     connectivities_(nullptr),
     dataType_(POINT),
-    outputPrefix_("NULL"),
+    outputPrefix_("nullptr"),
     ensightOutput_(true),
     textOutput_(false),
     fullTextOutput_(false),
     vtkOutput_(false),
     tensorToComponents_(false), // paraview does not support tensors
-    vectorToComponents_(false)
+    vectorToComponents_(false),
+    warnTooManyCols_(true),
+    hasNodesetMask_(false),
+    stride_(0)
 {}
 //-----------------------------------------------------------------------------
 //*
 //-----------------------------------------------------------------------------
 OutputManager::~OutputManager() {}
 //-----------------------------------------------------------------------------
-//*
+//* set option
 //-----------------------------------------------------------------------------
 void OutputManager::set_option(OutputOption option, bool value) {
   if      (option == OUTPUT_VECTOR_COMPONENTS) vectorToComponents_ = value;
   else if (option == OUTPUT_TENSOR_COMPONENTS) tensorToComponents_ = value;
+  else throw ATC_Error("unsupported output option");
+};
+void OutputManager::set_option(OutputOption option, int value) {
+  if      (option == STRIDE) stride_ = value;
+  else throw ATC_Error("unsupported output option");
+};
+void OutputManager::set_option(OutputOption option, set<int> & value) {
+  if      (option == NODESET_MASK) {
+    hasNodesetMask_ = true;
+    nodeset_ = value;
+  }
   else throw ATC_Error("unsupported output option");
 };
 
@@ -161,8 +177,8 @@ void OutputManager::read_restart_file(string fileName, RESTART_LIST *data)
     for (int i = 0; i < field_data->nRows(); ++i) {
       for (int j = 0; j < field_data->nCols(); ++j) {
         double myVal;
-        if (fread(&myVal,sizeof(double),1,fp) == 1)
-          (*field_data)(i,j) = myVal;  
+        fread(&myVal,sizeof(double),1,fp);
+        (*field_data)(i,j) = myVal;  
     
       }
     }
@@ -174,7 +190,7 @@ void OutputManager::read_restart_file(string fileName, RESTART_LIST *data)
 //-----------------------------------------------------------------------------
 void OutputManager::write_globals(void) 
 {
-  if ( outputPrefix_ == "NULL") return;
+  if ( outputPrefix_ == "nullptr") return;
   string file = outputPrefix_ + ".GLOBALS";
   ofstream text;
   if ( firstGlobalsWrite_ ) text.open(file.c_str(),ios_base::out);
@@ -184,17 +200,27 @@ void OutputManager::write_globals(void)
   map<string, double>::iterator iter;
   // header
   if ( firstStep_ || writeGlobalsHeader_) {
+    file =file + "_dict";
+    ofstream dict;
+    dict.open(file.c_str(),ios_base::out);
+    dict << "# variables and strings\n";
+    dict << "set macros\n";
     text << "# time:1 ";
+    dict << "time=1\n";
+    dict << "time=\"1\"\n";
     int index = 2;
     for (iter = globalData_.begin(); iter != globalData_.end(); iter++) 
     {
       string name  = iter->first;
+      dict << name << "=" << index << "\n";
+      dict << name << "=\"" << index << "\"\n";
       string str; stringstream out; out << ":" << index++; 
       str = out.str();
       name.append(str);
       text.width(kFieldWidth); text << name << " ";
     }
     text << '\n';
+    dict.close();
   }
   writeGlobalsHeader_ = false;
   // data
@@ -205,6 +231,7 @@ void OutputManager::write_globals(void)
     text << setw(kFieldWidth) << std::scientific << std::setprecision(kFieldPrecison) << value << " ";
   }
   text << "\n";
+  text.flush();
 }
 //-----------------------------------------------------------------------------
 //* 
@@ -212,7 +239,7 @@ void OutputManager::write_globals(void)
 void OutputManager::write_geometry(const MATRIX *coordinates, 
                                    const Array2D<int> *connectivities)
 {
-  if ( outputPrefix_ == "NULL") throw ATC_Error( "No outputPrefix given."); 
+  if ( outputPrefix_ == "nullptr") throw ATC_Error( "No outputPrefix given."); 
  
   number_of_nodes_ = coordinates->nCols();
   coordinates_ = coordinates;
@@ -329,7 +356,7 @@ void OutputManager::write_geometry_ensight(void)
 //-----------------------------------------------------------------------------
 void OutputManager::write_geometry_text(void)
 {
-  if ( outputPrefix_ == "NULL") return;
+  if ( outputPrefix_ == "nullptr") return;
   // geometry based on a reference configuration
   string geom_file_text = outputPrefix_ + ".XYZ";
 
@@ -417,7 +444,7 @@ void OutputManager::write_data(double time, OUTPUT_LIST *data, const int *node_m
       write_data_ensight(field_name, field_data, node_map);
     }
     // write dictionary
-    write_dictionary(time,data);
+    write_dictionary_ensight(time,data);
   }
 
   // write text dump
@@ -437,7 +464,7 @@ void OutputManager::write_data(double time, OUTPUT_LIST *data, const int *node_m
     write_data_text(data,node_map); 
   }
   if (vtkOutput_) {
-    write_data_vtk(data); 
+    write_data_vtk(data,node_map); 
   }
 
   // global variables
@@ -550,8 +577,43 @@ void OutputManager::write_data_ensight(string field_name, const MATRIX *field_da
 //-----------------------------------------------------------------------------
 /** write data dict for both text & full_text */
 //-----------------------------------------------------------------------------
-void OutputManager::write_text_data_header(OUTPUT_LIST *data, ofstream & text, int k)
+void OutputManager::write_text_dictionary(OUTPUT_LIST *data, ofstream & text, bool full)
 {
+    string fname = outputPrefix_+".DATA_dict";
+    ofstream dict;
+    dict.open(fname.c_str(),ios_base::out);
+    dict << "# variables and strings\n";
+    dict << "set macros\n";
+    int k = 3;
+    if (full) {
+      k = 7;
+      text.width(6); text << "# index:1" << " "; 
+      text.width(6); text << " id:2" << " "; 
+      text.width(10); text << " step:3" << " "; 
+      text.width(4); text << " x:4" << " "; 
+      text.width(4); text << " y:5" << " "; 
+      text.width(4); text << " z:6" << " "; 
+      dict << "index=1\n";
+      dict << "index=\"1\"\n";
+      dict << "id=2\n";
+      dict << "id=\"2\"\n";
+      dict << "step=3\n";
+      dict << "step=\"3\"\n";
+      dict << "x=4\n";
+      dict << "x=\"4\"\n";
+      dict << "y=4\n";
+      dict << "y=\"4\"\n";
+      dict << "z=5\n";
+      dict << "z=\"5\"\n";
+    } 
+    else {
+      text.width(6); text << "# index:1" << " "; // give an ordinate for gnuplot
+      text.width(10); text << " step:2" << " "; 
+      dict << "index=1\n";
+      dict << "index=\"1\"\n";
+      dict << "step=2\n";
+      dict << "step=\"2\"\n";
+    }
     if (data) 
     {
       OUTPUT_LIST::iterator iter;
@@ -576,6 +638,8 @@ void OutputManager::write_text_data_header(OUTPUT_LIST *data, ofstream & text, i
         if (ncols == 1) {
           string name = field_name;
           custom_name(field_name,0,name);
+          dict << name << "=" << k << "\n";
+          dict << name << "=\"" << k << "\"\n";
           string str; stringstream out; out <<":"<<k; str = out.str();
           name.append(str);
           text.width(kFieldWidth); text << name << " ";
@@ -586,6 +650,8 @@ void OutputManager::write_text_data_header(OUTPUT_LIST *data, ofstream & text, i
             string name = field_name;
             string str; stringstream out; 
             if (! custom_name(field_name,i-1,name)) { out <<"_"<<i; }
+            dict << name+out.str() << "=" << k << "\n";
+            dict << name+out.str() << "=\"" << k << "\"\n";
             out <<":"<<k; str = out.str();
             name.append(str);
             text.width(kFieldWidth); text << name << " ";
@@ -608,12 +674,7 @@ void OutputManager::write_data_text(OUTPUT_LIST *data)
   else text.open(data_file_text.c_str(),ios_base::app);
 
   // write data label header
-  if (firstStep_) 
-  {
-    text.width(6); text << "# index:1" << " "; // give an ordinate for gnuplot
-    text.width(10); text << " step:2" << " "; 
-    write_text_data_header(data,text,3);
-  }
+  if (firstStep_) write_text_dictionary(data,text);
   text << "# timestep " << outputTimes_.size() << " : "
        << outputTimes_[outputTimes_.size()-1]  << "\n";
   
@@ -641,6 +702,7 @@ void OutputManager::write_data_text(OUTPUT_LIST *data)
       }
     }
     text <<"\n";
+    if (stride_ > 0 && (i+1) % stride_ == 0) { text << "\n"; }
   }
   text <<"\n";
 }
@@ -656,15 +718,9 @@ void OutputManager::write_data_text(OUTPUT_LIST *data, const int *node_map)
   else text.open(data_file_text.c_str(),ios_base::app);
 
   // write data label header
-  if (firstStep_) 
+  if (firstStep_)
   {
-    text.width(6); text << "# index:1" << " "; 
-    text.width(6); text << " id:2" << " "; 
-    text.width(10); text << " step:3" << " "; 
-    text.width(4); text << " x:4" << " "; 
-    text.width(4); text << " y:5" << " "; 
-    text.width(4); text << " z:6" << " "; 
-    write_text_data_header(data,text,7);
+    write_text_dictionary(data,text,true);
 
     if (connectivities_) 
     { 
@@ -692,10 +748,20 @@ void OutputManager::write_data_text(OUTPUT_LIST *data, const int *node_map)
   if (iter == data->end()) { throw ATC_Error(" no data in output");}
   int nnodes = coordinates_->nCols();
 
+  if (hasNodesetMask_){
+    text << "# nodeset mask: ";
+    for (set<int>::const_iterator itr = nodeset_.begin();
+                                  itr != nodeset_.end(); itr++) {
+      text << setw(6) << *itr;
+    }
+    text << "\n";
+  }
+
   for (int i = 0; i < nnodes; ++i) 
   {
     int unode = i;
     if (node_map) unode = node_map[i];
+    if (hasNodesetMask_ && ((nodeset_.find(i))==nodeset_.end())) {text << "#";}
     text.width(6); text << i << " "; 
     text.width(6); text << unode << " "; 
     text.width(10); text << outputTimes_.size() << " "; 
@@ -718,21 +784,24 @@ void OutputManager::write_data_text(OUTPUT_LIST *data, const int *node_map)
       }
     }
     text <<"\n";
+    if (stride_ > 0 && (i+1) % stride_ == 0) { text << "\n"; }
   }
+  text <<"\n";
   text <<"\n";
 }
 
 //-----------------------------------------------------------------------------
 /** write data  in vtk text format */
 //-----------------------------------------------------------------------------
-void OutputManager::write_data_vtk(OUTPUT_LIST *data)
+void OutputManager::write_data_vtk(OUTPUT_LIST *data, const int *node_map)
 {
-  string data_file_text = outputPrefix_ + ".vtk";
+  string data_file_text = outputPrefix_ + "_" + to_string(outputTimes_.size()) + ".vtk";
   ofstream text;
-  if  (firstStep_) text.open(data_file_text.c_str(),ios_base::out);
-  else throw ATC_Error(" vtk format can not handle multiple steps");
+  text.open(data_file_text.c_str(),ios_base::out);
+  //if  (firstStep_) text.open(data_file_text.c_str(),ios_base::out);
+  //else throw ATC_Error(" vtk format can not handle multiple steps");
   text << "# vtk DataFile Version 3.0\n";
-  text << "# " << outputPrefix_ << "\n";
+  text << "# " << outputPrefix_ << " time: " << outputTimes_[outputTimes_.size()-1]  << "\n";
   text << "ASCII\n";
   text << "DATASET UNSTRUCTURED_GRID\n";
   // geometry
@@ -759,6 +828,10 @@ void OutputManager::write_data_vtk(OUTPUT_LIST *data)
   }
   text << "\n";
   int cell_type = 4 ; 
+  if      (nodes_per_element == 4)  { cell_type = 10; }
+  else if (nodes_per_element == 8)  { cell_type = 12; }
+  else 
+    throw ATC_Error("VTK writer does not recoginize or can not handle element type");
   text << "CELL_TYPES " << nelems << "\n";
   for (int j = 0; j < nelems; ++j) {
     text << cell_type << "\n";
@@ -773,17 +846,45 @@ void OutputManager::write_data_vtk(OUTPUT_LIST *data)
     string field_name = iter->first;
     const MATRIX* field_data = iter->second;
     int ncols = field_data->nCols();
-    if (ncols == 1) { 
-      text << "SCALARS " << field_name << " float\n";
-      text << "LOOKUP_TABLE default\n";
+    int type = data_type(ncols);
+    if (use_component_names(type)){
+      string* component_names = get_component_names(type);
+      for (int j = 0; j < ncols; ++j) {
+        string comp_name = field_name + component_names[j];
+        text << "SCALARS " << comp_name << " float\n";
+        text << "LOOKUP_TABLE default\n";
+        for (int i = 0; i < nnodes; ++i) {
+          int unode = i;
+          if (node_map) unode = node_map[i];
+          text.width(kFieldWidth); 
+          text << setw(kFieldWidth) << std::scientific << std::setprecision(kFieldPrecison) << (*field_data)(unode,j) << "\n";
+        }
+        text <<"\n";
+      }
+      text <<"\n";
     }
     else {
-      text << "VECTORS " << field_name << " float\n";
-    }
-    for (int i = 0; i < nnodes; ++i) {
-      for (int j = 0; j < ncols; ++j) {
-        text.width(kFieldWidth); 
-        text << setw(kFieldWidth) << std::scientific << std::setprecision(kFieldPrecison) << (*field_data)(i,j) << " ";
+      if (ncols == 1) { 
+        text << "SCALARS " << field_name << " float\n";
+        text << "LOOKUP_TABLE default\n";
+      }
+      else if (ncols == 3) { 
+        text << "VECTORS " << field_name << " float\n";
+      }
+      else if (ncols == 9) { 
+        text << "TENSORS " << field_name << " float\n";
+      }
+      else { throw ATC_Error("VTK can't handle data type"); }
+      for (int i = 0; i < nnodes; ++i) {
+        int unode = i;
+        if (node_map) unode = node_map[i];
+        for (int j = 0; j < ncols; ++j) {
+          if (j == 3 || j == 6) { text <<"\n";} // tensor
+          text.width(kFieldWidth); 
+          text << setw(kFieldWidth) << std::scientific << std::setprecision(kFieldPrecison) << (*field_data)(unode,j) << " ";
+        }
+        text <<"\n";
+        if (ncols == 9) { text <<"\n";} // tensor
       }
       text <<"\n";
     }
@@ -792,7 +893,7 @@ void OutputManager::write_data_vtk(OUTPUT_LIST *data)
 }
 
 /** write (ensight gold : ASCII "C" format) dictionary */
-void OutputManager::write_dictionary(double /* time */, OUTPUT_LIST *data)
+void OutputManager::write_dictionary_ensight(double time, OUTPUT_LIST *data)
 {
   // file names
   string dict_file_name = outputPrefix_ + ".case";

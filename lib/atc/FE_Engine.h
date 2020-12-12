@@ -12,7 +12,6 @@
 #include "FE_Mesh.h"
 #include "PhysicsModel.h"
 #include "OutputManager.h"
-#include "MeshReader.h"
 #include "mpi.h"
 
 namespace ATC {
@@ -102,7 +101,7 @@ namespace ATC {
     void delete_elements(const std::set<int> &elementList);
     void cut_mesh(const std::set<PAIR> &cutFaces, const std::set<int> &edgeNodes);
 
-    void add_global(const std::string name, const double value) 
+    void add_global(const std::string name, const double value)
     { outputManager_.add_global(name,value); }
 
     void add_field_names(const std::string field, const std::vector<std::string> & names)
@@ -345,7 +344,7 @@ namespace ATC {
 
 
     /** integrate a nodal field over an face set */
-    DENS_VEC integrate(const DENS_MAT  & /* field */, const FSET & /* fset */) const
+    DENS_VEC integrate(const DENS_MAT  &field, const FSET & fset) const
     { throw ATC_Error(FILELINE,"unimplemented function"); }
 
     /*@}*/
@@ -496,8 +495,7 @@ namespace ATC {
     /** set kernel */
     
     void set_kernel(KernelFunction* ptr);
-    KernelFunction *kernel(int /* i */) { return kernelFunction_; }
-    KernelFunction *kernel() { return kernelFunction_; }
+    KernelFunction *kernel(int i=0) { return kernelFunction_; }
 
   private:
     //----------------------------------------------------------------
@@ -510,7 +508,7 @@ namespace ATC {
     /** finite element mesh */
     FE_Mesh *feMesh_;
 
-    /** auxiliary kernel function */
+    /** auxillary kernel function */
     KernelFunction *kernelFunction_;
  
     /** initialized flag */ 

@@ -12,7 +12,7 @@
 #include <map>
 #include <set>
 #include <utility>
-#include <cfloat>
+#include <float.h>
 #include <string>
 #include <vector>
 #include "mpi.h"
@@ -40,6 +40,12 @@ namespace ATC {
 
     /** initialization */
     void initialize(void);
+
+    /** check */
+    bool check(void);
+
+    /** mesh type */
+    std::string type(void) {return type_;}
 
     /** write an unstructured mesh */
     void write_mesh(std::string meshFile);
@@ -230,6 +236,7 @@ namespace ATC {
                         double xmin, double xmax,
                         double ymin, double ymax,
                         double zmin, double zmax);
+    void print_nodesets() const;
 
     /** add to node set with tag "name" from nodes in given spatial range */
     void add_to_nodeset(const std::string & name,
@@ -239,6 +246,9 @@ namespace ATC {
 
     /** get element set from the string name assigned to the set */
     const std::set<int> & elementset(const std::string & name) const;
+
+    /** create element set with tag "name" from nodes in given spatial range */
+    void create_elementset(const std::string & name, const std::set<int> & elemset);
 
     /** create element set with tag "name" from nodes in given spatial range */
     void create_elementset(const std::string & name,
@@ -276,6 +286,9 @@ namespace ATC {
                                std::set<int> nodeSet) const;
     std::set<int> elementset_to_nodeset(const std::string &name) const;
 
+    /** create face set with tag "name" from nodes in given spatial range */
+    void create_faceset(const std::string & name, const std::set<PAIR> & faceset);
+
     /** convert faceset to nodeset in _unique_ node numbering */
     void faceset_to_nodeset(const std::string &name, 
                             std::set<int> &nodeSet) const;
@@ -286,6 +299,8 @@ namespace ATC {
                                    std::set<int> &nodeSet) const;
     void faceset_to_nodeset_global(const std::set<PAIR> &faceSet, 
                                    std::set<int> &nodeSet) const;
+    void faceset_to_elementset(const std::string &name, 
+                            std::set<int> &elemSet) const;
 
     /** get face set from the string name assigned to the set */
     const std::set< std::pair<int,int> > & faceset(const std::string & name) const;
@@ -345,7 +360,6 @@ namespace ATC {
     /** Engine nodeMap stuff  */
     Array<int> *node_map(void) { return &globalToUniqueMap_;}
 
-
     /** return scale in x,y,z */
     double xscale() const { return xscale_; }
     double yscale() const { return yscale_; }
@@ -399,7 +413,7 @@ namespace ATC {
     const std::vector<int> & owned_and_ghost_elts() const { 
       return (decomposition_) ? myAndGhostElts_: myElts_; }
     bool is_owned_elt(int elt) const;
-    
+
   protected:
 
     void parse_plane(int & argIdx, int narg, char ** arg,  
@@ -495,6 +509,10 @@ namespace ATC {
     std::vector<int> shareNodesL_;
     std::vector<int> shareNodesR_;
 
+
+    /** type of mesh */
+    std::string type_;
+
     /** extruded */
     bool twoDimensional_;
     bool hasPlanarFaces_;
@@ -588,8 +606,7 @@ namespace ATC {
     void distribute_mesh_data();
   protected:
     /** create global-to-unique node mapping */
-    virtual void setup_periodicity(double tol);
-    virtual void setup_periodicity() { setup_periodicity(1.e-8); }
+    virtual void setup_periodicity(double tol = 1.e-8);
     void fix_periodicity  (int idim);
     int find_boundary_nodes(int idim, std::set<int> & nodes);
     bool match_nodes(int idim, std::set<int> & top, std::set<int> & bot,
@@ -691,8 +708,8 @@ namespace ATC {
 
     void departition_mesh(void);
     
-    virtual void element_size(const int /* ielem */, 
-                              double &hx, double &hy, double &hz)
+    virtual void element_size(const int ielem, 
+                              double hx, double hy, double hz) 
     { hx = L_[0]/n_[0]; hy = L_[1]/n_[1]; hz = L_[2]/n_[2]; }
 
     virtual double min_element_size(void) const
@@ -707,6 +724,6 @@ namespace ATC {
 
   };
 
-} // namespace ATC_Transfer
+}; // namespace ATC_Transfer
 
 #endif // FE_MESH_H

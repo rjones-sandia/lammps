@@ -30,6 +30,8 @@ namespace ATC {
     useFeMdMassMatrix_(false),
     trackCharge_(false),
     temperatureDef_(NONE),
+    outputFlux_(false),
+    schwarzCoupling_(false),
     prescribedDataMgr_(nullptr),
     physicsModel_(nullptr),
     extrinsicModelManager_(this),
@@ -70,7 +72,9 @@ namespace ATC {
     interscaleManager_.clear(); 
     if (feEngine_) { delete feEngine_; feEngine_ = nullptr; } 
     if (physicsModel_) delete physicsModel_;
-    if (atomicRegulator_) delete atomicRegulator_;
+    for (_rIt_ = atomicRegulators_.begin(); _rIt_ != atomicRegulators_.end(); ++_rIt_) {
+      delete *_rIt_;
+    }
     if (prescribedDataMgr_) delete prescribedDataMgr_;
     for (_tiIt_ = timeIntegrators_.begin(); _tiIt_ != timeIntegrators_.end(); ++_tiIt_) {
       delete _tiIt_->second;
@@ -104,8 +108,24 @@ namespace ATC {
       &&(strcmp(arg[argIdx+1],"charge")==0)) {
       match = extrinsicModelManager_.modify(narg-argIdx,&arg[argIdx]);
     }
+    else if ((strcmp(arg[argIdx],"control")==0)
+      &&(strcmp(arg[argIdx+1],"momentum")==0)
+      &&(strcmp(arg[argIdx+2],"schwarz")==0)) { 
+      schwarzCoupling_ = true;
+      if (narg > argIdx+3) {
+        string nsetName = arg[argIdx+3];
+        schwarzCouplingNodeSet_ = (feEngine_->fe_mesh())->nodeset(nsetName);
+      }
+      match = true;
+    }
     // parsing handled here
     else {
+      if (strcmp(arg[argIdx],"output_flux")==0) {
+        argIdx++;
+        if (narg > argIdx && strcmp(arg[argIdx],"off")==0) { outputFlux_ = false; }
+        else                                               { outputFlux_ = true; }
+        match = true;
+      }
       /*! \page man_initial fix_modify AtC initial 
         \section syntax
         fix_modify AtC initial <field> <nodeset> <constant | function>
@@ -123,7 +143,7 @@ namespace ATC {
         none
       */
       // set initial conditions
-      if (strcmp(arg[argIdx],"initial")==0) {
+      else if (strcmp(arg[argIdx],"initial")==0) {
         argIdx++;
         parse_field(arg,argIdx,thisField,thisIndex);
         string nsetName(arg[argIdx++]);
@@ -422,6 +442,7 @@ namespace ATC {
     */
       else if (strcmp(arg[argIdx],"fe_md_boundary")==0) {
         bndyIntType_ = FE_INTERPOLATION;// default
+        argIdx++;
         if(strcmp(arg[argIdx],"faceset")==0) {
           argIdx++;
           bndyIntType_ = FE_QUADRATURE;
@@ -429,7 +450,6 @@ namespace ATC {
           bndyFaceSet_ = & ( (feEngine_->fe_mesh())->faceset(name));
         } 
         else if (strcmp(arg[argIdx],"interpolate")==0) {
-          argIdx++;
           bndyIntType_ = FE_INTERPOLATION;
         }
         else if (strcmp(arg[argIdx],"no_boundary")==0) { 
@@ -438,6 +458,7 @@ namespace ATC {
         else {
           throw ATC_Error("Bad boundary integration type");
         }
+        match = true;
       }
 
 
@@ -625,7 +646,7 @@ namespace ATC {
       /*! \page man_consistent_fe_initialization fix_modify AtC consistent_fe_initialization
       \section syntax
        fix_modify AtC consistent_fe_initialization <on | off>
-        - <on|off> = switch to activiate/deactiviate the initial setting of FE intrinsic field to match the projected MD field
+        - <on|off> = switch to activiate/deactiviate the intial setting of FE intrinsic field to match the projected MD field
       \section examples
        <TT> fix_modify atc consistent_fe_initialization on </TT>
       \section description
@@ -747,6 +768,26 @@ namespace ATC {
       needReset_ = true;
     }
 
+    /*! \page man_material fix_modify AtC average
+      \section syntax
+      fix_modify AtC average [fieldname] [sample_frequency]  \n
+      \section examples
+      <TT> fix_modify AtC filter displacement 20</TT>
+      \section description
+      Averages nodal values of designated field for output
+      \section restrictions 
+      \section related
+      \section default
+    */
+    else if (strcmp(arg[argIdx],"average")==0) {
+      argIdx++;
+      string field = arg[argIdx];
+      FieldName f = string_to_field(field);
+      requestedAverages_.insert(f);
+      sampleFrequency_ = 1;
+      match = true;
+    }
+
     } // end else 
     // no match, call base class parser
     if (!match) {
@@ -835,6 +876,27 @@ namespace ATC {
   {
     ATC_Method::construct_methods();
 
+    // if averaging is requested and won't interfer with filtering dynamics
+    for (set<FieldName>::const_iterator itr = requestedAverages_.begin();
+                                        itr != requestedAverages_.end(); 
+                                        itr++) {
+      FieldName f = *itr;
+      string field = field_to_string(f);
+      filteredData_[field] = DENS_MAN(nNodes_,fieldSizes_[f]);
+    }
+
+    if (filteredData_.size() > 0 && timeFilters_.size() == 0) {
+      int n = filteredData_.size();
+      timeFilters_.reset(n);
+      TAG_FIELDS::iterator titr;
+      int i = 0;
+      for (titr=filteredData_.begin(); titr != filteredData_.end(); titr++) {
+        string name= titr->first;
+        filteredData_[name] = 0.0;
+        timeFilters_(i++) = timeFilterManager_.construct();
+      }
+    }
+
     // construct needed time filters for mass matrices
     if (timeFilterManager_.need_reset()) {
       init_filter();
@@ -850,7 +912,10 @@ namespace ATC {
     for (_tiIt_ = timeIntegrators_.begin(); _tiIt_ != timeIntegrators_.end(); ++_tiIt_) {
       (_tiIt_->second)->construct_methods();
     }
-    atomicRegulator_->construct_methods();
+    for (_rIt_ = atomicRegulators_.begin(); _rIt_ != atomicRegulators_.end(); ++_rIt_) {
+      (*_rIt_)->construct_methods();
+    }
+
   }
   //-------------------------------------------------------------------
   void ATC_Coupling::init_filter()
@@ -862,6 +927,15 @@ namespace ATC {
         int thisSize = field->second;
         (nodalAtomicFieldsRoc_[thisField].set_quantity()).reset(nNodes_,thisSize);
       }
+      if (filteredData_.size() > 0) {
+        TAG_FIELDS::iterator titr;
+        int i = 0;
+        for (titr=filteredData_.begin(); titr != filteredData_.end(); titr++) {
+          string name= titr->first;
+          FieldName field = string_to_field(name);
+          timeFilters_(i++)->initialize(fields_[field].quantity());
+        }
+      }
     }
   }
   //--------------------------------------------------------
@@ -871,6 +945,8 @@ namespace ATC {
     prescribedDataMgr_->set_fixed_fields(time(),
       fields_,dot_fields_,ddot_fields_,dddot_fields_);
 
+    // for dirichlet/schwartz coupling
+    if ( schwarzCoupling_ ) { this->set_schwarz_nodes(); }
 
     // set related data
     map<FieldName,int>::const_iterator field;
@@ -1211,7 +1287,7 @@ namespace ATC {
           throw;
       }
     }
-   
+
     // initialize and fix computational geometry, this can be changed in the future for Eulerian calculations that fill and empty elements which is why it is outside a !initialized_ guard
     internalElement_->unfix_quantity();
     if (ghostElement_) ghostElement_->unfix_quantity();
@@ -1256,7 +1332,9 @@ namespace ATC {
       for (_tiIt_ = timeIntegrators_.begin(); _tiIt_ != timeIntegrators_.end(); ++_tiIt_) {
         (_tiIt_->second)->initialize();
       }
-      atomicRegulator_->initialize();
+      for (_rIt_ = atomicRegulators_.begin(); _rIt_ != atomicRegulators_.end(); ++_rIt_) {
+        (*_rIt_)->initialize();
+      }
     }
     extrinsicModelManager_.initialize();
     if (timeFilterManager_.need_reset()) {// reset thermostat power
@@ -1537,6 +1615,22 @@ namespace ATC {
     }
     interscaleManager_.add_dense_matrix_int(nodalGeometryType_,
                                             "NodalGeometryType");
+
+    // add nodesets for coupling
+    for (map<FieldName,int>::const_iterator itr = fieldSizes_.begin(); 
+         itr != fieldSizes_.end(); itr++) {
+      FieldName field = itr->first;
+      string name = field_to_string(field);
+      FixedNodes f(this,field);
+      set<int> nodes = f.quantity();
+      string nname = name+"_fixed";
+      feEngine_->create_nodeset(nname,nodes);
+      FluxNodes n(this,field);
+      nodes = n.quantity();
+      nname = name+"_flux";
+      feEngine_->create_nodeset(nname,nodes);
+    }
+
   }
   //--------------------------------------------------------
   //  construct_interpolant
@@ -1693,7 +1787,7 @@ namespace ATC {
     extrinsicModelManager_.construct_transfers();
   }
   //--------------------------------------------------
-  void ATC_Coupling::delete_mass_mat_time_filter(FieldName /* thisField */)
+  void ATC_Coupling::delete_mass_mat_time_filter(FieldName thisField)
   {
   }
   //--------------------------------------------------
@@ -1954,14 +2048,42 @@ namespace ATC {
   }
 
   //--------------------------------------------------------
+  void ATC_Coupling::time_filter_pre(double dt)
+  {
+    double delta_t = dt*sampleFrequency_;
+    TAG_FIELDS::iterator titr;
+    int i = 0;
+    for (titr=filteredData_.begin(); titr != filteredData_.end(); titr++) {
+      string name= titr->first;
+      FieldName field = string_to_field(name);
+      timeFilters_(i++)->apply_pre_step1(filteredData_[name].set_quantity(),
+                                         fields_[field].quantity(), delta_t);
+    }
+  }
+  //--------------------------------------------------------
+  void ATC_Coupling::time_filter_post(double dt)
+  {
+    double delta_t = dt*sampleFrequency_;
+    TAG_FIELDS::iterator titr;
+    int i = 0;
+    for (titr=filteredData_.begin(); titr != filteredData_.end(); titr++) {
+      string name= titr->first;
+      FieldName field = string_to_field(name);
+      timeFilters_(i++)->apply_post_step2(filteredData_[name].set_quantity(),
+                                         fields_[field].quantity(), delta_t);
+    }
+  }
+
+  //--------------------------------------------------------
   //  pre_init_integrate
   //    time integration before the lammps atomic
   //    integration of the Verlet step 1
   //--------------------------------------------------------
   void ATC_Coupling::pre_init_integrate()
   {
-    ATC_Method::pre_init_integrate();
     double dt = lammpsInterface_->dt();
+    time_filter_pre(dt);
+    ATC_Method::pre_init_integrate();
 
     // Perform any initialization, no actual integration
     for (_tiIt_ = timeIntegrators_.begin(); _tiIt_ != timeIntegrators_.end(); ++_tiIt_) {
@@ -1969,7 +2091,9 @@ namespace ATC {
     }
 
     // Apply controllers to atom velocities, if needed
-    atomicRegulator_->apply_pre_predictor(dt,lammpsInterface_->ntimestep());
+    for (_rIt_ = atomicRegulators_.begin(); _rIt_ != atomicRegulators_.end(); ++_rIt_) {
+      (*_rIt_)->apply_pre_predictor(dt,lammpsInterface_->ntimestep());
+    }
 
     // predict nodal fields and time derivatives
     for (_tiIt_ = timeIntegrators_.begin(); _tiIt_ != timeIntegrators_.end(); ++_tiIt_) {
@@ -1990,7 +2114,9 @@ namespace ATC {
     interscaleManager_.fundamental_force_reset(LammpsInterface::ATOM_VELOCITY);
 
     // apply constraints to velocity
-    atomicRegulator_->apply_mid_predictor(dt(),lammpsInterface_->ntimestep());
+    for (_rIt_ = atomicRegulators_.begin(); _rIt_ != atomicRegulators_.end(); ++_rIt_) {
+      (*_rIt_)->apply_mid_predictor(dt(),lammpsInterface_->ntimestep());
+    }
 
     atomTimeIntegrator_->init_integrate_position(dt());
     ghostManager_.init_integrate_position(dt());
@@ -2013,7 +2139,9 @@ namespace ATC {
     }
 
     // Update kinetostat quantities if displacement is being regulated
-    atomicRegulator_->apply_post_predictor(dt,lammpsInterface_->ntimestep());
+    for (_rIt_ = atomicRegulators_.begin(); _rIt_ != atomicRegulators_.end(); ++_rIt_) {
+      (*_rIt_)->apply_post_predictor(dt,lammpsInterface_->ntimestep());
+    }
 
     // Update extrisic model
     extrinsicModelManager_.post_init_integrate();
@@ -2062,7 +2190,9 @@ namespace ATC {
   void ATC_Coupling::pre_force()
   {
     ATC_Method::pre_force();
-    atomicRegulator_->pre_force(); 
+    for (_rIt_ = atomicRegulators_.begin(); _rIt_ != atomicRegulators_.end(); ++_rIt_) {
+      (*_rIt_)->pre_force();
+    }
   }
 
   //--------------------------------------------------------
@@ -2135,22 +2265,28 @@ namespace ATC {
       atomicRegulator_->compute_boundary_flux(fields_);
       compute_atomic_sources(intrinsicMask_,fields_,atomicSources_);
     }
-    atomicRegulator_->apply_pre_corrector(dt,lammpsInterface_->ntimestep());
+    for (_rIt_ = atomicRegulators_.begin(); _rIt_ != atomicRegulators_.end(); ++_rIt_) {
+      (*_rIt_)->apply_pre_corrector(dt,lammpsInterface_->ntimestep());
+    }
     
     // Compute atom-integrated rhs
     // parallel communication happens within FE_Engine
     compute_rhs_vector(intrinsicMask_,fields_,rhs_,FE_DOMAIN);
-    for (_tiIt_ = timeIntegrators_.begin(); _tiIt_ != timeIntegrators_.end(); ++_tiIt_) {
-      (_tiIt_->second)->add_to_rhs();
+    if ( ! schwarzCoupling_ ) {
+      for (_tiIt_ = timeIntegrators_.begin(); _tiIt_ != timeIntegrators_.end(); ++_tiIt_) {
+        (_tiIt_->second)->add_to_rhs();
+      }
+      for (_rIt_ = atomicRegulators_.begin(); _rIt_ != atomicRegulators_.end(); ++_rIt_) {
+        (*_rIt_)->add_to_rhs(rhs_);
+      }
     }
-    atomicRegulator_->add_to_rhs(rhs_);
     
-    // Compute and add atomic contributions to FE equations
+    // Compute and add atomic contributions to FE equations (REJ???)
     for (_tiIt_ = timeIntegrators_.begin(); _tiIt_ != timeIntegrators_.end(); ++_tiIt_) {
       (_tiIt_->second)->post_final_integrate1(dt);
     }
 
-   // fix nodes, non-group bcs applied through FE
+    // fix nodes, non-group bcs applied through FE
     set_fixed_nodes();
         
     // corrector step extrinsic model
@@ -2177,7 +2313,9 @@ namespace ATC {
     
     // apply corrector phase of thermostat
     set_fixed_nodes();
-    atomicRegulator_->apply_post_corrector(dt,lammpsInterface_->ntimestep());
+      for (_rIt_ = atomicRegulators_.begin(); _rIt_ != atomicRegulators_.end(); ++_rIt_) {
+        (*_rIt_)->apply_post_corrector(dt,lammpsInterface_->ntimestep());
+      }
 
     // final phase of time integration
     for (_tiIt_ = timeIntegrators_.begin(); _tiIt_ != timeIntegrators_.end(); ++_tiIt_) {
@@ -2192,7 +2330,9 @@ namespace ATC {
     output();
     lammpsInterface_->computes_addstep(lammpsInterface_->ntimestep()+1); // adds next step to computes
     //ATC_Method::post_final_integrate();
+    time_filter_post(dt);
   }
+
 
   //=================================================================
   //
@@ -2204,7 +2344,9 @@ namespace ATC {
     for (_tiIt_ = timeIntegrators_.begin(); _tiIt_ != timeIntegrators_.end(); ++_tiIt_) {
       (_tiIt_->second)->finish();
     }
-    atomicRegulator_->finish();
+    for (_rIt_ = atomicRegulators_.begin(); _rIt_ != atomicRegulators_.end(); ++_rIt_) {
+      (*_rIt_)->finish();
+    }
   }
 
 
@@ -2275,7 +2417,14 @@ if (thisFieldName >= rhsMask.nRows()) break;
   }
 
   //-----------------------------------------------------------------
-  void ATC_Coupling::compute_flux(const Array2D<bool> & rhsMask,
+  void ATC_Coupling::project_fluxes(const Array2D<bool> & rhsMask,
+                                  const FIELDS & fields, 
+                                  GRAD_FIELD_MATS & flux,
+                                  const PhysicsModel * physicsModel)
+  {
+  }
+  //-----------------------------------------------------------------
+  void ATC_Coupling::compute_fluxes(const Array2D<bool> & rhsMask,
                                   const FIELDS & fields, 
                                   GRAD_FIELD_MATS & flux,
                                   const PhysicsModel * physicsModel,
@@ -2318,6 +2467,27 @@ if (i==0) f.print("flux_"+field_to_string(name)+"_"+ATC_Utility::to_string(i));
     const DENS_MAT & B(rhs[fieldName].quantity());
 
     field = (invNodeVolumes_.quantity())*B;
+  }
+  //-----------------------------------------------------------------
+  void ATC_Coupling::compute_flux(const FieldName field,
+                                  DENS_MAT & stress)
+  {
+    Array2D <bool> rhsMask(NUM_FIELDS,NUM_FLUX);
+    rhsMask = false;
+    rhsMask(field,FLUX) = true;
+    GRAD_FIELD_MATS flux;
+    flux[field].reserve(nsd_);
+    compute_fluxes(rhsMask,fields_,flux,physicsModel_); 
+    GRAD_MAT & f = flux[field];
+    int ndof = fieldSizes_[field];
+    stress.resize(nNodes_,nsd_*ndof);
+    for (int i = 0; i < nNodes_; ++i) {
+      for (int j = 0; j < nsd_; ++j) {
+        for (int k = 0; k < ndof; ++k) {
+          stress(i,nsd_*k+j) = f[j](i,k);
+        }
+      }
+    }
   }
 
   // parse_boundary_integration

@@ -43,8 +43,7 @@ namespace ATC {
    *  @brief  Class for storing parameters needed for computing the Cauchy-Born stress
    */
 
-  class StressArgs {
-  public:
+  struct StressArgs {
     StressArgs(AtomCluster &v, CbPotential *p, double kB, double hbar, double T)
       : vac(v), potential(p), boltzmann_constant(kB), planck_constant(hbar),
       temperature(T) {}

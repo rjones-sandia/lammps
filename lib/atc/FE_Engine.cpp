@@ -1,14 +1,14 @@
 #include "FE_Engine.h"
-
-#include "ATC_Transfer.h"
 #include "FE_Element.h"
+#include "MeshReader.h"
+#include "Mesher.h"
 #include "Function.h"
 #include "PhysicsModel.h"
 #include "KernelFunction.h"
 #include "Utility.h"
 #include "MPI_Wrappers.h"
-#include <cstdio>
-#include <cstdlib>
+#include <stdio.h>
+#include <stdlib.h>
 #include <map>
 #include <string>
 
@@ -27,7 +27,8 @@ using MPI_Wrappers::print_msg_once;
 
 namespace ATC{
 
-  static const double tol_sparse = 1.e-30;//tolerance for compaction from dense
+  //static const double tol_sparse = 1.e-30;//tolerance for compaction from dense
+  static const double tol_sparse = 1.e-14;//tolerance for compaction from dense
 
   //-----------------------------------------------------------------
   FE_Engine::FE_Engine(MPI_Comm comm)
@@ -140,88 +141,25 @@ namespace ATC{
   bool FE_Engine::modify(int narg, char **arg)
   {
     bool match = false;
-    /*! \page man_mesh_create fix_modify AtC mesh create
-      \section syntax
-      fix_modify AtC mesh create <nx> <ny> <nz> <region-id> 
-      <f|p> <f|p> <f|p> \n
-      - nx ny nz = number of elements in x, y, z
-      - region-id = id of region that is to be meshed
-      - f p p = periodicity flags for x, y, z
-      \section examples
-      <TT> fix_modify AtC mesh create 10 1  1  feRegion p p p </TT> \n
-      \section description
-      Creates a uniform mesh in a rectangular region
-      \section restrictions
-      Creates only uniform rectangular grids in a rectangular region
-      \section related
-      \ref man_mesh_quadrature
-      \section default
-      When created, mesh defaults to gauss2 (2-point Gaussian) quadrature. 
-      Use "mesh quadrature" command to change quadrature style.
-    */
     int argIdx = 0;
     if (strcmp(arg[argIdx],"mesh")==0) { 
       argIdx++;
       // create mesh
       if (strcmp(arg[argIdx],"create")==0) {
+        argIdx++;
         if (feMesh_) throw ATC_Error("FE Engine already has a mesh");
-        argIdx++;
-        int nx = atoi(arg[argIdx++]);
-        int ny = atoi(arg[argIdx++]);
-        int nz = atoi(arg[argIdx++]);
-        string box = arg[argIdx++];
-
-        Array<bool> periodicity(3);
-        periodicity(0) = (strcmp(arg[argIdx++],"p")==0) ? true : false; 
-        periodicity(1) = (strcmp(arg[argIdx++],"p")==0) ? true : false;
-        periodicity(2) = (strcmp(arg[argIdx++],"p")==0) ? true : false;
-
-        if (argIdx < narg ) {
-          Array<double> dx(nx),dy(ny),dz(nz);
-
-          dx = 0;
-          dy = 0;
-          dz = 0;
-          while (argIdx < narg) {
-            if      (strcmp(arg[argIdx],"dx")==0) {
-              parse_partitions(++argIdx, narg, arg, 0, dx);
-            }
-            else if (strcmp(arg[argIdx],"dy")==0) {
-              parse_partitions(++argIdx, narg, arg, 1, dy);
-            }
-            else if (strcmp(arg[argIdx],"dz")==0) {
-              parse_partitions(++argIdx, narg, arg, 2, dz);
-            }
-          }
-
-          create_mesh(dx, dy, dz, box.c_str(), periodicity);
+        Mesher mesher;
+        match = mesher.modify(narg-argIdx,arg+argIdx);
+        if (match) {
+          feMesh_ = mesher.mesh();
+          quadrature_ = GAUSS2;
+          stringstream ss;
+          ss << "created " << feMesh_->type() << " mesh with " 
+             << feMesh_->num_nodes() << " nodes, "
+             << feMesh_->num_nodes_unique() << " unique nodes, and "
+             << feMesh_->num_elements() << " elements";
+          print_msg_once(communicator_,ss.str());
         }
-        else  {
-          create_mesh(nx, ny, nz, box.c_str(), periodicity);
-        }
-        quadrature_ = GAUSS2;
-        match = true;
-      }
-    /*! \page man_mesh_quadrature fix_modify AtC mesh quadrature
-      \section syntax
-      fix_modify AtC mesh quadrature <quad>
-      - quad = one of <nodal|gauss1|gauss2|gauss3|face> --- when a mesh is created it defaults to gauss2, use this call to change it after the fact
-      \section examples
-      <TT> fix_modify AtC mesh quadrature face </TT>
-      \section description
-      (Re-)assigns the quadrature style for the existing mesh.
-      \section restrictions
-      \section related
-      \ref man_mesh_create
-      \section default
-      none 
-    */
-      else if (strcmp(arg[argIdx],"quadrature")==0) {
-        argIdx++;
-        string quadStr = arg[argIdx];
-        FeIntQuadrature quadEnum = string_to_FIQ(quadStr);
-        set_quadrature(quadEnum);
-        match = true;
       }
     /*! \page man_mesh_read fix_modify AtC mesh read 
       \section syntax
@@ -278,6 +216,27 @@ namespace ATC{
         argIdx++;
         string meshFile = arg[argIdx];
         feMesh_->write_mesh(meshFile);
+        match = true;
+      }
+    /*! \page man_mesh_quadrature fix_modify AtC mesh quadrature
+      \section syntax
+      fix_modify AtC mesh quadrature <quad>
+      - quad = one of <nodal|gauss1|gauss2|gauss3|face> --- when a mesh is created it defaults to gauss2, use this call to change it after the fact
+      \section examples
+      <TT> fix_modify AtC mesh quadrature face </TT>
+      \section description
+      (Re-)assigns the quadrature style for the existing mesh.
+      \section restrictions
+      \section related
+      \ref man_mesh_create
+      \section default
+      none 
+    */
+      else if (strcmp(arg[argIdx],"quadrature")==0) {
+        argIdx++;
+        string quadStr = arg[argIdx];
+        FeIntQuadrature quadEnum = string_to_FIQ(quadStr);
+        set_quadrature(quadEnum);
         match = true;
       }
       /*! \page man_mesh_delete_elements fix_modify AtC mesh delete_elements
@@ -349,12 +308,11 @@ namespace ATC{
         else throw ATC_Error("not enough element partitions");
       }
     }
-    // each segment of the piecewise function is length-normalized separately
+    // each segment of the piecewise funcion is length-normalized separately
     else if (strcmp(arg[argIdx],"position-number-density")==0) { 
       argIdx++;
-      double *y = new double[nx];
-      double *w = new double[nx];
-      int *n = new int[nx];
+      double y[nx],w[nx];
+      int n[nx];
       int nn = 0;
       while (argIdx < narg) { 
         if (! is_numeric(arg[argIdx])) break;
@@ -370,7 +328,7 @@ namespace ATC{
         double w0 = w[i-1];
         double dw = w[i]-w0;
         double lx = 0;
-        double *l = new double[dn];
+        double l[dn];
         for (int j = 0; j < dn; ++j) {
           double x = (j+0.5)/dn; 
           double dl = w0+x*dw;
@@ -381,11 +339,7 @@ namespace ATC{
         for (int j = 0; j < dn; ++j) {
           dx(k++) = scale*l[j];
         }
-        delete[] l;
       }
-      delete[] y;
-      delete[] w;
-      delete[] n;
     }
     // construct relative values from a density function
     // evaluate for a domain (0,1)
@@ -721,7 +675,7 @@ namespace ATC{
                             const SPAR_MAT      &N,
                             const SPAR_MAT_VEC  &dN,
                             SPAR_MAT &tangent,
-                                         const DenseMatrix<bool> * /* elementMask */ ) const
+                            const DenseMatrix<bool> *elementMask ) const
   {
     int nn = nNodesUnique_;
     FieldName rowField = row_col.first;
@@ -1100,7 +1054,7 @@ namespace ATC{
           _fieldName_ = field_mask(j);
           // mass matrix needs to be invertible so null matls have cap=1
           if (physicsModel->null(_fieldName_,iatomMat)) {
-             throw ATC_Error("null material not supported for atomic region (single material)");
+             throw ATC_Error("null material not supported for atomic region (single material) for material "+to_string(iatomMat)+" and field "+field_to_string(_fieldName_));
              const FIELD &  f = (fields.find(_fieldName_))->second;
              capacities[_fieldName_].reset(f.nRows(),f.nCols());
              capacities[_fieldName_] = 1.;
@@ -1183,6 +1137,7 @@ namespace ATC{
   //-----------------------------------------------------------------
   void FE_Engine::compute_gradient_matrix(SPAR_MAT_VEC & grad_matrix) const
   {
+    ATC::LammpsInterface::instance()->stream_msg_once("computing gradient matrix ",true,false);
     // zero
     DENS_MAT_VEC tmp_grad_matrix(nSD_);  
     for (int i = 0; i < nSD_; i++) {
@@ -1213,6 +1168,7 @@ namespace ATC{
         }
       }
     }
+    ATC::LammpsInterface::instance()->stream_msg_once("swapping ",false,false);
     // Assemble partial results
     for (int k = 0; k < nSD_; ++k) {
       allsum(communicator_,MPI_IN_PLACE, tmp_grad_matrix[k].ptr(), tmp_grad_matrix[k].size());
@@ -1226,10 +1182,13 @@ namespace ATC{
         }
       }
     }
+    ATC::LammpsInterface::instance()->stream_msg_once("compacting ",false,false);
     // compact dense matrices
     for (int k = 0; k < nSD_; ++k) {
       grad_matrix[k]->reset(tmp_grad_matrix[k],tol_sparse);
+      tmp_grad_matrix[k].reset(0,0); // release memory
     }
+    ATC::LammpsInterface::instance()->stream_msg_once("done",false,true);
   }
 
   // -------------------------------------------------------------
@@ -1298,7 +1257,7 @@ namespace ATC{
     const PhysicsModel * physicsModel,
     const Array<int>   & elementMaterials,
     FIELDS &rhs,
-                                     bool /* freeOnly */,
+    bool freeOnly,
     const DenseMatrix<bool> *elementMask) const
   {
     vector<FieldName> usedFields;
@@ -2203,6 +2162,7 @@ namespace ATC{
         }
         // construct open flux at ips of this element
         // flux = field \otimes advection_vector \dot n
+        FSET::const_iterator face_iter = fset->find(face);
         faceSource.reset(nIPsPerFace_,nFieldDOF);
         for (int ip = 0; ip < nIPsPerFace_; ++ip) {
           for (int idof = 0; idof<nFieldDOF; ++idof) {
@@ -2503,7 +2463,7 @@ namespace ATC{
   // previously computed nodal sources
   //-----------------------------------------------------------------
   void FE_Engine::add_sources(const Array<bool> &fieldMask,
-                              const double /* time */,
+    const double time,
     const FIELDS &sources,
     FIELDS &nodalSources) const
   {
@@ -2975,5 +2935,6 @@ namespace ATC{
     if (feMesh_) throw ATC_Error("FE_Engine already has a mesh");
     feMesh_ = MeshReader(meshFile,periodicity).create_mesh();
     feMesh_->initialize();
+    feMesh_->check();
   }
 };

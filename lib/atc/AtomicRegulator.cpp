@@ -158,7 +158,7 @@ namespace ATC {
   //    parses and adjusts controller state based on
   //    user input, in the style of LAMMPS user input
   //--------------------------------------------------------
-  bool AtomicRegulator::modify(int /* narg */, char **arg)
+  bool AtomicRegulator::modify(int narg, char **arg)
   {
     bool foundMatch = false;
 
@@ -216,6 +216,8 @@ namespace ATC {
        <TT> fix_modify atc control localized_lambda on </TT> \n
       \section description
       Turns on localization algorithms for control algorithms to restrict the influence of FE coupling or boundary conditions to a region near the boundary of the MD region.  Control algorithms will not affect atoms in elements not possessing faces on the boundary of the region.  Flux-based control is localized via row-sum lumping while quantity control is done by solving a truncated matrix equation.
+      NOTE localized: hoover, lumped: flux??
+
       \section restrictions 
       \section related
       \section default
@@ -590,6 +592,25 @@ namespace ATC {
   void RegulatorShapeFunction::create_node_maps()
   {
     this->construct_regulated_nodes();
+
+    // add nodesets for output
+    string name;
+    set<int> nodes;
+    if (regulatedNodes_) {
+      name = regulatorPrefix_+"_regulated_nodes";
+      nodes = regulatedNodes_->quantity();
+      atc_->create_nodeset(name,nodes);
+    }
+    if (applicationNodes_) {
+      name = regulatorPrefix_+"_application_nodes";
+      nodes = applicationNodes_->quantity();
+      atc_->create_nodeset(name,nodes);
+    }
+    if (boundaryNodes_) {
+      name = regulatorPrefix_+"_boundary_nodes";
+      nodes = boundaryNodes_->quantity();
+      atc_->create_nodeset(name,nodes);
+    }
 
     InterscaleManager & interscaleManager(atc_->interscale_manager());
     nodeToOverlapMap_ = static_cast<NodeToSubset * >(interscaleManager.dense_matrix_int(regulatorPrefix_+"NodeToOverlapMap"));

@@ -5,7 +5,7 @@
 
 #include <iostream>
 #include <vector>
-#include <cmath>
+#include <math.h>
 
 using ATC_Utility::command_line;
 using ATC_Utility::str2dbl;

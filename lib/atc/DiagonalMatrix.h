@@ -49,8 +49,7 @@ class DiagonalMatrix : public Matrix<T>
   void write_restart(FILE *f)     const;
 
   // Dump matrix contents to screen (not defined for all datatypes)
-  std::string to_string(int /* p */) const { return _data->to_string(); }
-  std::string to_string() const { return _data->to_string(); }
+  std::string to_string(int p=myPrecision) const { return _data->to_string(); }
 
   using Matrix<T>::matlab;
   void matlab(std::ostream &o, const std::string &s="D") const;
@@ -79,8 +78,8 @@ class DiagonalMatrix : public Matrix<T>
 
 protected:
   void _set_equal(const Matrix<T> &r);
-  DiagonalMatrix& operator=(const Vector<T> & /* c */) {}
-  DiagonalMatrix& operator=(const Matrix<T> & /* c */) {}
+  DiagonalMatrix& operator=(const Vector<T> &c) {}
+  DiagonalMatrix& operator=(const Matrix<T> &c) {}
 
 private: 
   void _delete();
@@ -214,7 +213,7 @@ DiagonalMatrix<T>::DiagonalMatrix(INDEX rows, bool zero)
 //-----------------------------------------------------------------------------
 template<typename T>
 DiagonalMatrix<T>::DiagonalMatrix(const DiagonalMatrix<T>& c)
- : Matrix<T>(), _data(nullptr)
+ : _data(nullptr)
 {
   reset(c);
 }
@@ -223,7 +222,7 @@ DiagonalMatrix<T>::DiagonalMatrix(const DiagonalMatrix<T>& c)
 //-----------------------------------------------------------------------------
 template<typename T>
 DiagonalMatrix<T>::DiagonalMatrix(const Vector<T>& v)
- : Matrix<T>(), _data(nullptr)
+ : _data(nullptr)
 {
   reset(v);
 }
@@ -247,7 +246,7 @@ void DiagonalMatrix<T>::_delete()
 // resizes the matrix, ignores nCols, optionally zeros 
 //-----------------------------------------------------------------------------
 template<typename T>
-void DiagonalMatrix<T>::reset(INDEX rows, INDEX /* cols */, bool zero)
+void DiagonalMatrix<T>::reset(INDEX rows, INDEX cols, bool zero)
 {
   _delete();
   _data = new DenseVector<T>(rows, zero);
@@ -256,7 +255,7 @@ void DiagonalMatrix<T>::reset(INDEX rows, INDEX /* cols */, bool zero)
 // resizes the matrix, ignores nCols, optionally copies what fits
 //-----------------------------------------------------------------------------
 template<typename T>
-void DiagonalMatrix<T>::resize(INDEX rows, INDEX /* cols */, bool copy)
+void DiagonalMatrix<T>::resize(INDEX rows, INDEX cols, bool copy)
 {
   _data->resize(rows, copy);  
 }
@@ -328,7 +327,7 @@ void DiagonalMatrix<T>::shallowreset(const DenseMatrix<T> &c)
 // reference indexing operator - must throw an error if i!=j
 //-----------------------------------------------------------------------------
 template<typename T>
-T& DiagonalMatrix<T>::operator()(INDEX i, INDEX /* j */)
+T& DiagonalMatrix<T>::operator()(INDEX i, INDEX j)
 {
   GCK(*this,*this,i!=j,"DiagonalMatrix: tried to index off diagonal");
   return (*this)[i];
@@ -472,7 +471,7 @@ inline DiagonalMatrix<double> inv(const DiagonalMatrix<double>& A)
   return A.inv();
 }
 //-----------------------------------------------------------------------------
-// general diagonalmatrix assignment
+// general diagonalmatrix assigment 
 //-----------------------------------------------------------------------------
 template<typename T>
 void DiagonalMatrix<T>::_set_equal(const Matrix<T> &r)

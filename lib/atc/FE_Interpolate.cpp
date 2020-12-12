@@ -5,7 +5,7 @@
 #include "FE_Quadrature.h"
 
 // Other headers
-#include <cmath>
+#include "math.h"
 
 using std::map;
 using std::vector;
@@ -564,7 +564,7 @@ namespace ATC {
     
     N = 1.0;
     dNdr = 1.0;
-    // mapping returns the 1d nodes in each dimension that should be multiplied
+    // mapping returns the 1d nodes in each dimension that sould be multiplied
     // to achieve the shape functions in 3d
     vector<int> mapping(nSD_);
     for (int inode=0; inode<numEltNodes; ++inode) {
@@ -890,7 +890,7 @@ namespace ATC {
    *
    * Note: degenerating quads/hexes can yield simplices
    *       as well, but this class is for computing these
-   *       shape functions _natively_, in their own
+   *       shape fucntions _natively_, in their own
    *       triangular/tetrahedral coordinate systems.
    *
    *********************************************************/

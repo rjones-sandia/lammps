@@ -112,7 +112,7 @@ namespace ATC {
         for (itr=eset_.begin(); itr != eset_.end(); itr++) {
           if (map(i,0) == *itr) {
             int a = quantityToLammps(i);
-            if (type[a] == type_) {
+            if (type_ < 0 || type[a] == type_) {
               list_.push_back(ID_PAIR(i,a)); 
               break;
             }
@@ -1129,7 +1129,7 @@ namespace ATC {
   FluctuatingKineticTensor::FluctuatingKineticTensor(ATC_Method * atc,
      PerAtomQuantity<double> * atomVelocities,
      PerAtomQuantity<double> * atomMasses,
-                                                     PerAtomQuantity<double> * /* atomMeanVelocities */,
+     PerAtomQuantity<double> * atomMeanVelocities,
      AtomType atomType) :
     ProtectedAtomQuantity<double>(atc,6,atomType),
     atomVelocities_(atomVelocities),

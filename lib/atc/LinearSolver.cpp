@@ -65,7 +65,7 @@ LinearSolver::LinearSolver(
     matrixModified_(false),
     allowReinitialization_(false), 
     homogeneousBCs_(false),
-    bcs_(nullptr), // null implies no constraints will be added later
+    bcs_(nullptr), // null implies no contraints will be added later
     rhs_(nullptr),
     rhsDense_(), b_(nullptr),
     matrix_(A),

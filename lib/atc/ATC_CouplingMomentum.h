@@ -72,8 +72,12 @@ namespace ATC {
     /** physics specific filter initialization */
     void init_filter();
 
+    /** physics specific schwarz coupling */
+    virtual void set_schwarz_nodes();
+
     // data
     double refPE_;
+    DENS_MAT stress_;
 
     /** mass matrix computed with atomic quadrature for KE output */
     MASS_MATS Ma_;

@@ -14,6 +14,7 @@
 #include <iostream>
 
 using std::string;
+using std::set;
 
 namespace ATC {
 
@@ -53,6 +54,7 @@ namespace ATC {
 
     // use a kinetostat
     atomicRegulator_ = new Kinetostat(this);
+    atomicRegulators_.push_back(atomicRegulator_);
 
     // set time integrator and change any defaults based on model type
     if (intrinsicModel == ELASTIC) {
@@ -61,7 +63,7 @@ namespace ATC {
       timeIntegrators_[VELOCITY] = new MomentumTimeIntegrator(this,TimeIntegrator::VERLET);
       ghostManager_.set_boundary_dynamics(GhostManager::PRESCRIBED);
     }
-    else if (intrinsicModel == SHEAR) {
+    else if (intrinsicModel == SHEAR) { // fluids ??
       atomToElementMapType_ = EULERIAN;
       atomToElementMapFrequency_ = 1;
       timeIntegrators_[VELOCITY] = new MomentumTimeIntegrator(this,TimeIntegrator::GEAR);
@@ -115,6 +117,9 @@ namespace ATC {
 
     refPE_=0;
     refPE_=potential_energy();
+
+    // output variable
+    stress_.reset(nNodes_,9);
   }
 
   //--------------------------------------------------------
@@ -189,6 +194,28 @@ namespace ATC {
   }
 
   //---------------------------------------------------------
+  //  set displacements at designated schwarz node
+  //---------------------------------------------------------
+  void ATC_CouplingMomentum::set_schwarz_nodes() 
+  {
+    DENS_MAT & U = fields_[DISPLACEMENT].set_quantity();
+    DENS_MAT & V = fields_[VELOCITY].set_quantity();
+    const DENS_MAT & u = nodalAtomicFields_[DISPLACEMENT].quantity();
+    const DENS_MAT & v = nodalAtomicFields_[VELOCITY].quantity();
+    int ndim = U.nCols();
+    set<int>::const_iterator itr;
+    set<int> & nodes = ATC_Coupling::schwarzCouplingNodeSet_;
+    for (itr = nodes.begin(); itr != nodes.end(); ++itr) {
+      int i = *itr;
+      for (int j = 0; j < ndim; j++) {
+        U(i,j) = u(i,j);
+        V(i,j) = v(i,j);
+      }
+    }
+   
+  };
+
+  //---------------------------------------------------------
   //  init_filter
   //    sets up the time filtering operations in all objects
   //---------------------------------------------------------
@@ -255,6 +282,7 @@ namespace ATC {
       }
     }
 
+    // add damping to boundary nodes/atoms
     else if (strcmp(arg[argIndex],"boundary_dynamics")==0) {
       argIndex++;
       foundMatch = ghostManager_.modify(narg-argIndex,&arg[argIndex]);
@@ -295,6 +323,9 @@ namespace ATC {
 
 
 
+/*
+
+
     
     if (outputNow_) {
       update_time(1.0);
@@ -302,6 +333,7 @@ namespace ATC {
       output();
       outputNow_ = false;
     }
+*/
     
     
     localStep_ += 1;
@@ -314,30 +346,41 @@ namespace ATC {
   void ATC_CouplingMomentum::output() 
   {
     if (output_now()) {
+      DENS_MAT stress;
+      if (outputFlux_) compute_flux(VELOCITY,stress);
+
       feEngine_->departition_mesh();
       OUTPUT_LIST outputData;
       
       // base class output
       ATC_Method::output();
 
+
       // push atc fields time integrator modifies into output arrays
       for (_tiIt_ = timeIntegrators_.begin(); _tiIt_ != timeIntegrators_.end(); ++_tiIt_) {
         (_tiIt_->second)->post_process();
       }
 
-      // auxiliary data
+      // auxilliary data
       for (_tiIt_ = timeIntegrators_.begin(); _tiIt_ != timeIntegrators_.end(); ++_tiIt_) {
         (_tiIt_->second)->output(outputData);
       }
       atomicRegulator_->output(outputData);
       extrinsicModelManager_.output(outputData);
       
+      // mesh data
       DENS_MAT & velocity(nodalAtomicFields_[VELOCITY].set_quantity());
       DENS_MAT & rhs(rhs_[VELOCITY].set_quantity());
       if (lammpsInterface_->rank_zero()) {
-        // mesh data
+        TAG_FIELDS::iterator titr;
+        for (titr=filteredData_.begin(); titr != filteredData_.end(); titr++) {
+          string name= titr->first;
+          //FIELD f = titr->second;// note issue as rhs to below
+          outputData["average_"+name] =  & ( filteredData_[name].set_quantity() );
+        }
         outputData["NodalAtomicVelocity"] = &velocity;
         outputData["FE_Force"] = &rhs;
+        if (outputFlux_) { outputData["stress"] = &stress; }
         if (trackDisplacement_) {
           outputData["NodalAtomicDisplacement"] = & nodalAtomicFields_[DISPLACEMENT].set_quantity();
         }

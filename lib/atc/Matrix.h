@@ -26,8 +26,7 @@ public:
   friend std::ostream& operator<<(std::ostream &o, const Matrix<T> &m){m.print(o); return o;}
   void print() const;
   virtual void print(const std::string &name, int p = myPrecision) const;
-  virtual std::string to_string(int p) const;
-  virtual std::string to_string() const { return to_string(myPrecision); }
+  virtual std::string to_string(int p = myPrecision) const;
 
   // element by element operations
   DenseMatrix<T> operator/(const Matrix<T>& B) const;
@@ -150,7 +149,7 @@ protected:
 
 //* Matrix operations 
 //@{
-//* Sets C as b*C + a*A[transpose?]*B[transpose?]
+//* Sets C as b*C + a*A[tranpose?]*B[transpose?] 
 template<typename T>
 void MultAB(const Matrix<T> &A, const Matrix<T> &B, DenseMatrix<T> &C, 
             bool At=0, bool Bt=0, T a=1, T b=0);
@@ -162,8 +161,11 @@ void MultMv(const Matrix<T> &A, const Vector<T> &v, DenseVector<T> &c,
 DenseMatrix<double> inv(const Matrix<double>& A);
 // returns the eigensystem of a pair of double precision matrices
 DenseMatrix<double> eigensystem(const Matrix<double>& A, const Matrix<double>& B, DenseMatrix<double> & eVals, bool normalize = true);
+//DenseMatrix<double> eigensystem(const Matrix<double>& A, DenseMatrix<double> & eVals, bool normalize = true);
 // returns the polar decomposition of a double precision matrix
 DenseMatrix<double>  polar_decomposition(const Matrix<double>& A, DenseMatrix<double> & rotation, DenseMatrix<double> & stretch, bool leftRotation = true);
+void singular_value_decomposition(const Matrix<double>& A, DenseMatrix<double> & U, DenseMatrix<double> & D, DenseMatrix<double> & VT);
+void eigenvectors(const Matrix<double>& A, DenseMatrix<double> & V, bool norm = false);
 
 //* returns the trace of a matrix
 template<typename T> 
@@ -248,7 +250,7 @@ DenseMatrix<T> operator-(const Matrix<T> &A, const Matrix<T> &B)
 //* performs a matrix-matrix multiply with general type implementation
 template<typename T>
 void MultAB(const Matrix<T> &A, const Matrix<T> &B, DenseMatrix<T> &C, 
-            const bool At, const bool Bt, T /* a */, T b)
+            const bool At, const bool Bt, T a, T b)
 {
   const INDEX sA[2] = {A.nRows(), A.nCols()};  // m is sA[At] k is sA[!At]
   const INDEX sB[2] = {B.nRows(), B.nCols()};  // k is sB[Bt] n is sB[!Bt]
@@ -291,11 +293,15 @@ std::string Matrix<T>::to_string(int p) const
 {
   std::string s;
   for (INDEX i=0; i<nRows(); i++) {
-    if (i) s += '\n';
+//  if (i) s += '\n';
     for (INDEX j=0; j<nCols(); j++) {
       //if (j) s+= '\t';
-      s += ATC_Utility::to_string((*this)(i,j),p)+" ";
+      if (std::fabs((*this)(i,j)) > 1.e-16) 
+        s += ATC_Utility::to_string((*this)(i,j),p)+" ";
+      else
+        s += "-- ";
     }
+    s += "["+ATC_Utility::to_string(i)+"]\n";
   }
   return s;
 }
@@ -356,7 +362,7 @@ DenseMatrix<T> Matrix<T>::pow(double n) const
   int sz=this->size(); for(INDEX i=0; i<sz; i++)
   {
     double val = R[i];
-    R[i] = std::pow(val,n);
+    R[i] = pow(val,n);
   }
   return R;
 }
@@ -609,7 +615,7 @@ Matrix<T>& Matrix<T>::divide_zero_safe(const Matrix<T>& R)
 template<typename T>
 Matrix<T>& Matrix<T>::operator*=(const T v)       
 {
-  int sz=this->size(); for(INDEX i=0; i<sz; i++) (*this)[i]*=v;      
+  int sz=this->size(); for(INDEX i=0; i<sz; i++) (*this)[i] *= v;      
   return *this;
 }
 //-----------------------------------------------------------------------------
@@ -618,16 +624,16 @@ Matrix<T>& Matrix<T>::operator*=(const T v)
 template<typename T>
 Matrix<T>& Matrix<T>::operator+=(const T v)       
 {
-  int sz=this->size(); for(INDEX i=0; i<sz; i++) (*this)[i]+=v;      
+  int sz=this->size(); for(INDEX i=0; i<sz; i++) (*this)[i] += v;      
   return *this;
 }
 //-----------------------------------------------------------------------------
-// subtracts a constant to this matrix
+// substracts a constant to this matrix 
 //-----------------------------------------------------------------------------
 template<typename T>
 Matrix<T>& Matrix<T>::operator-=(const T v)       
 {
-  int sz=this->size(); for(INDEX i=0; i<sz; i++) (*this)[i]-=v;      
+  int sz=this->size(); for(INDEX i=0; i<sz; i++) (*this)[i] -= v;      
   return *this;
 }
 //-----------------------------------------------------------------------------

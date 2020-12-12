@@ -32,7 +32,7 @@ namespace ATC
     Material();
     virtual ~Material();
     /** this constructor parses material file */
-    Material(std::string & tag, std::fstream & fileId);
+    Material(std::string & tag, std::fstream & fileId, std::string units = "none");
 
     /** initialize */
     virtual void initialize();
@@ -41,8 +41,20 @@ namespace ATC
     std::string label(void) const {return tag_;}
 
     /** check material has required interfaces */
+    void print_registry() const
+    {
+      std::cout << "registry for material ["<<tag_<<"] ";
+      std::set<std::string>::const_iterator itr;
+      for (itr=registry_.begin(); itr!=registry_.end(); itr++) {
+        std::cout << *itr << " ";
+      }
+      std::cout << "\n";
+    }
+
+    /** check material has required interfaces */
     bool check_registry(const std::set<std::string> functionList) const
     { 
+      //print_registry();
       std::set<std::string>::const_iterator itr;
       for (itr=functionList.begin(); itr!=functionList.end(); itr++) {
         if (registry_.find(*itr) == registry_.end()) {
@@ -83,7 +95,7 @@ namespace ATC
 
     /** each of these is a field function computed at a set of points */
     /** if there is only one function it is in the base class 
-     ** otherwise, a subsidiary class is setup */
+     ** otherwise, a subsidary class is setup */
     /* -----------------------------------------------------------------*/
     /** densities */
     /* -----------------------------------------------------------------*/
@@ -198,6 +210,8 @@ namespace ATC
   protected:
     /** material's label  */
     std::string tag_;
+    /** material's unit system  */
+    std::string units_;
     /** dictionary of material parameters */
     std::map<std::string,double> parameters_;
     /** dictionary of instantiated functions */

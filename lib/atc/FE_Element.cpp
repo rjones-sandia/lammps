@@ -8,7 +8,7 @@
 #include "Utility.h"
 
 // Other headers
-#include <cmath>
+#include "math.h"
 
 using ATC_Utility::dbl_geq;
 using ATC_Utility::det3;
@@ -18,6 +18,17 @@ namespace ATC {
 
 static const int localCoordinatesMaxIterations_ = 40;
 static const double localCoordinatesTolerance = 1.e-09;
+
+double triple_product(vector< DENS_VEC > & vs ) {
+  DENS_VEC & v1 = vs[0];
+  DENS_VEC & v2 = vs[1];
+  DENS_VEC & v3 = vs[2];
+  double product = 0;
+  product += v1(0)*v2(1)*v3(2) - v3(0)*v2(1)*v1(2);
+  product += v1(1)*v2(2)*v3(0) - v3(1)*v2(2)*v1(0);
+  product += v1(2)*v2(0)*v3(1) - v3(2)*v2(0)*v1(1);
+  return product;
+}
 
 
   // =============================================================
@@ -34,7 +45,8 @@ static const double localCoordinatesTolerance = 1.e-09;
       numFaceNodes_(numFaceNodes),
       numNodes1d_(numNodes1d),
       tolerance_(localCoordinatesTolerance),
-      projectionGuess_(COORDINATE_ALIGNED)
+      projectionGuess_(COORDINATE_ALIGNED),
+      hasPlanarFaces_(false) 
   {
     feInterpolate_ = nullptr;
   }
@@ -224,7 +236,7 @@ static const double localCoordinatesTolerance = 1.e-09;
     DENS_MAT faceCoords;
     DENS_VEC normal;
     normal.reset(nSD_);
-    DENS_VEC faceToPoint;
+    DENS_VEC point, faceToPoint;
     double dot;
     bool inside = true;
     for (int faceID=0; faceID<numFaces_; ++faceID) {
@@ -232,11 +244,13 @@ static const double localCoordinatesTolerance = 1.e-09;
       feInterpolate_->face_normal(faceCoords, 
                                   0,
                                   normal);
-      faceToPoint = x - column(faceCoords, 0);
+      point = column(faceCoords, 0);
+      faceToPoint = x - point;
       dot = normal.dot(faceToPoint);
-      if (dbl_geq(dot,0)) {
+      //if (dbl_geq(dot,0)) {
+      if (dot > 0) {
         inside = false;
-        break;
+        break; 
       }
     }
     return inside;
@@ -408,7 +422,7 @@ static const double localCoordinatesTolerance = 1.e-09;
       throw ATC_Error("Unrecognized interpolation order specified " 
                       "for element class: \n"                       
                       "  element only knows how to construct lin "  
-                        "and quad elements.");
+                        "and quad elments.");
     }
 
     localCoords_.resize(nSD_,numNodes_);
@@ -547,6 +561,7 @@ static const double localCoordinatesTolerance = 1.e-09;
                                      const DENS_VEC &x) const
   {
     if (! range_check(eltCoords,x) ) return false;
+    if (hasPlanarFaces_) return FE_Element::contains_point(eltCoords,x);
 
     DENS_VEC xi;
     bool converged = local_coordinates(eltCoords,x,xi); 
@@ -555,6 +570,24 @@ static const double localCoordinatesTolerance = 1.e-09;
       if (!dbl_geq(1.0,abs(xi(i)))) return false;
     }
     return true;
+  }
+
+  bool FE_ElementHex::check(const DENS_MAT &eltCoords)
+  {
+    vector< DENS_VEC > dx;
+    for (int k=0; k < 3; ++k) {
+      DENS_VEC c(nSD_);
+      for (int j=0; j < 4; ++j) {
+        int f1 = localFaceConn_(2*k  ,j);
+        int f2 = localFaceConn_(2*k+1,j);
+        for (int iSD=0; iSD<nSD_; ++iSD) {
+           c(iSD) += eltCoords(iSD,f2);
+           c(iSD) -= eltCoords(iSD,f1);
+        }
+      }
+      dx.push_back(c);
+    }
+    return triple_product(dx) > 0;
   }
 
   // =============================================================
@@ -637,7 +670,7 @@ static const double localCoordinatesTolerance = 1.e-09;
       throw ATC_Error("Unrecognized interpolation order specified " 
                       "for element class: \n"                       
                       "  element only knows how to construct lin "  
-                        "and quad elements.");
+                        "and quad elments.");
     }
     
     localCoords_.resize(nSD_+1, numNodes_);

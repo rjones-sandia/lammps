@@ -11,6 +11,7 @@
 // 1 -> scalar
 // 3 -> vector  x,y,z
 // NOT 6 -> tensor  xx,xy,xz,yy,yz,zz
+// NOT 6 -> tensor  xx,yy,zz,yz,yz,xy
 // 6 -> tensor  xx,yy,zz,xy,zx,yz
 // 9 -> tensor  xx,xy,xz,yx,yy,yz,zx,zy,zz
 
@@ -20,7 +21,10 @@ namespace ATC {
   enum OutputDataType { POINT=0, MESH };
   enum OutputDataCardinality { SCALAR_OUTPUT=0, VECTOR_OUTPUT, TENSOR_OUTPUT, 
     SYM_TENSOR_OUTPUT, LIST_OUTPUT };
-  enum OutputOption   { OUTPUT_VECTOR_COMPONENTS=0, OUTPUT_TENSOR_COMPONENTS};
+  enum OutputOption   { OUTPUT_VECTOR_COMPONENTS=0,
+                        OUTPUT_TENSOR_COMPONENTS,
+                        NODESET_MASK,
+                        STRIDE};
 
   /**
    *  @class  OutputManager 
@@ -39,6 +43,8 @@ namespace ATC {
 
     /** set output options */
     void set_option(OutputOption option, bool value); 
+    void set_option(OutputOption option, int value); 
+    void set_option(OutputOption option, std::set<int> & value); 
 
     // Dump text-based field info to disk for later restart
     void write_restart_file(std::string fileName, RESTART_LIST *data);
@@ -106,11 +112,11 @@ namespace ATC {
     void write_geometry_ensight(void);
     void write_geometry_text(void);
     void write_data_ensight(std::string name, const MATRIX *data, const int *node_map);
-    void write_text_data_header(OUTPUT_LIST *data, std::ofstream & text, int k);
+    void write_text_dictionary(OUTPUT_LIST *data, std::ofstream & text, bool full=false);
     void write_data_text(OUTPUT_LIST *data);
     void write_data_text(OUTPUT_LIST *data, const int *node_map);
-    void write_data_vtk(OUTPUT_LIST *data);
-    void write_dictionary(double time, OUTPUT_LIST *data);
+    void write_data_vtk(OUTPUT_LIST *data,  const int *node_map);
+    void write_dictionary_ensight(double time, OUTPUT_LIST *data);
     void write_globals();
 
     /** status flags */
@@ -142,6 +148,11 @@ namespace ATC {
     bool warnTooManyCols_;
     /** global variables */
     std::map<std::string,double> globalData_;
+    /** nodeset mask */
+    bool hasNodesetMask_;
+    std::set<int> nodeset_;
+    /** stride for formating structured 2D data */
+    int stride_;
   };
 }
 #endif

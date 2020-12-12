@@ -31,7 +31,9 @@ namespace ATC {
         transitionInterval(0),
         maxEnergy(0),
         maxExchanges(0),
-        maxAttempts(0) { };
+        maxAttempts(0),
+        controlAverage(false),
+        sampleAverage(0) { };
       ConcentrationRegulatorType method;
       int type;
       int groupbit;
@@ -44,6 +46,8 @@ namespace ATC {
       int maxAttempts;
       std::string transitionTag;
       ESET elemset; 
+      bool controlAverage;
+      int sampleAverage;
     };
 
     /** constructor */
@@ -54,25 +58,27 @@ namespace ATC {
     virtual bool modify(int narg, char **arg);
     /** construct methods */
     virtual void construct_methods();
+    /** method(s) create all necessary transfer operators */
+    virtual void construct_transfers() {}; // override base
     /** pre time integration */
     virtual void initialize();
 
     //WIP_JAT need a nicer way to consistently handle sets of regulators, not sure how yet
     // application steps
     /** apply the regulator in the pre-predictor phase */
-    virtual void apply_pre_predictor(double /* dt */, int /* timeStep */){};
+    virtual void apply_pre_predictor(double dt, int timeStep){};
     /** apply the regulator in the mid-predictor phase */
-    virtual void apply_mid_predictor(double /* dt */, int /* timeStep */){};
+    virtual void apply_mid_predictor(double dt, int timeStep){};
     /** apply the regulator in the post-predictor phase */
-    virtual void apply_post_predictor(double /* dt */, int /* timeStep */){};
+    virtual void apply_post_predictor(double dt, int timeStep){};
     /** apply the regulator in the pre-correction phase */
-    virtual void apply_pre_corrector(double /* dt */, int /* timeStep */){};
+    virtual void apply_pre_corrector(double dt, int timeStep){};
     /** apply the regulator in the post-correction phase */
-    virtual void apply_post_corrector(double /* dt */, int /* timeStep */){};
+    virtual void apply_post_corrector(double dt, int timeStep){};
     /** compute the thermal boundary flux, must be consistent with regulator */
-    virtual void compute_boundary_flux(FIELDS & /* fields */){};
+    virtual void compute_boundary_flux(FIELDS & fields){};
     /** add contributions (if any) to the finite element right-hand side */
-    virtual void add_to_rhs(FIELDS & /* rhs */){};
+    virtual void add_to_rhs(FIELDS & rhs){};
 
     /** prior to exchanges */
     virtual void pre_force();
@@ -113,8 +119,8 @@ namespace ATC {
     virtual void pre_exchange() {};  
     virtual void finish() {};  
     virtual void set_weights() {};
-    virtual double compute_vector(int /* n */) const { return 0;}
-    virtual void output(OUTPUT_LIST & /* outputData */){};
+    virtual double compute_vector(int n) const { return 0;}
+    virtual void output(OUTPUT_LIST & outputData){};
   private:
     ConcentrationRegulatorMethod(); // DO NOT define this
   };
@@ -144,7 +150,7 @@ namespace ATC {
     virtual double compute_vector(int n) const;
   protected:
     /** set transition state: epsilon and charge */
-    int mask(int /* type */, int /* groupbit */) {return 0;}
+    int mask(int type, int groupbit) {return 0;}
     int count(void) const;
     int excess(void) const;
     double energy(int id) const;
@@ -202,6 +208,11 @@ namespace ATC {
     int maxExchanges_;
     int maxAttempts_;
     int nexchanges_;
+    int napplications_;
+    bool controlAverage_;
+    int sampleAverage_;
+    int sumExcess_;
+    int nsamples_;;
     bool initialized_;
     double sigma_;
 

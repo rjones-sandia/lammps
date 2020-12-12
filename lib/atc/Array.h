@@ -4,7 +4,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <string>
-#include <cstdio>
+#include <stdio.h>
 
 // for macros
 #include "MatrixDef.h"

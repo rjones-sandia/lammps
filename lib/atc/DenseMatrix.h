@@ -17,9 +17,9 @@ class DenseMatrix : public Matrix<T>
 {
 public:
   DenseMatrix(INDEX rows=0, INDEX cols=0, bool z=1): _data(nullptr){ _create(rows, cols, z); }
-  DenseMatrix(const DenseMatrix<T>& c) : Matrix<T>(), _data(nullptr){ _copy(c); }
-  DenseMatrix(const SparseMatrix<T>& c): Matrix<T>(), _data(nullptr){ c.dense_copy(*this);}
-  DenseMatrix(const Matrix<T>& c)      : Matrix<T>(), _data(nullptr){ _copy(c); }
+  DenseMatrix(const DenseMatrix<T>& c) : _data(nullptr){ _copy(c); }
+  DenseMatrix(const SparseMatrix<T>& c): _data(nullptr){ c.dense_copy(*this);}
+  DenseMatrix(const Matrix<T>& c)      : _data(nullptr){ _copy(c); }
 //  const SparseMatrix<T> * p = sparse_cast(&c);
 //  (p) ? p->dense_copy(*this) : _copy(c); }
   ~DenseMatrix()                                    { _delete();}
@@ -273,7 +273,12 @@ void DenseMatrix<T>::_create(INDEX rows, INDEX cols, bool zero)
 
   _nRows=rows; 
   _nCols=cols;
+  try{
   _data = (this->size() ? new T [_nCols*_nRows] : nullptr);
+  }
+  catch(std::bad_alloc&) {
+    std::cout << "!!! ATC cannot allocate a matrix of size "<< this->size() << " !!!" << std::endl;
+  }
   if (zero) this->zero();
 }
 //----------------------------------------------------------------------------
@@ -333,7 +338,6 @@ DenseMatrix<T>& DenseMatrix<T>::operator=(const SparseMatrix<T> &c)
   for (INDEX i=0; i<c.size(); i++)
   {
     TRIPLET<T> x = c.triplet(i);
-    std::cout << "x.i: "<< x.i << "\nx.j: "<< x.j << "\nv.j: "<< x.v << std::endl << std::endl;
     (*this)(x.i, x.j) =  x.v;
   }
   return *this;

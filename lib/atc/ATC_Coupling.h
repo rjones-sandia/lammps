@@ -77,6 +77,10 @@ namespace ATC {
     /** Predictor phase, executed after Verlet */
     virtual void post_init_integrate();
 
+    /** steps for post processing time filter */
+    void time_filter_pre (double dt);
+    void time_filter_post(double dt);
+
     /** Corrector phase, executed after Verlet*/
     
     virtual void post_final_integrate();
@@ -131,7 +135,7 @@ namespace ATC {
     virtual void initialize_mesh_data(void);  
 
 // public for FieldIntegrator
-    bool source_atomic_quadrature(FieldName /* field */)  
+    bool source_atomic_quadrature(FieldName field)  
       { return (sourceIntegration_ == FULL_DOMAIN_ATOMIC_QUADRATURE_SOURCE); }
     ATC::IntegrationDomainType source_integration() 
       { return sourceIntegration_; }
@@ -227,7 +231,7 @@ namespace ATC {
 
     void set_mass_mat_time_filter(FieldName thisField,TimeFilterManager::FilterIntegrationType filterIntegrationType);
 
-    /** return reference to ExtrinsicModelManager */
+    /** return referece to ExtrinsicModelManager */
     ExtrinsicModelManager & extrinsic_model_manager() 
       { return extrinsicModelManager_; }
     /** access to time integrator */
@@ -319,11 +323,16 @@ namespace ATC {
     /** field mask for intrinsic integration */
     Array2D<bool> intrinsicMask_;
     /** wrapper for FE_Engine's compute_flux functions */
-    void compute_flux(const Array2D<bool> & rhs_mask,
+    void project_fluxes(const Array2D<bool> & rhsMask,
+                      const FIELDS & fields, 
+                      GRAD_FIELD_MATS & flux,
+                      const PhysicsModel * physicsModel);
+    void compute_fluxes(const Array2D<bool> & rhs_mask,
                       const FIELDS &fields, 
                       GRAD_FIELD_MATS &flux,
                       const PhysicsModel * physicsModel=nullptr,
-                      const bool normalize = false);
+                      const bool project = false);
+    void compute_flux(const FieldName field, DENS_MAT & flux);
     /** evaluate rhs on the atomic domain which is near the FE region */
     void masked_atom_domain_rhs_integral(const Array2D<bool> & rhs_mask,
                                          const FIELDS &fields, 
@@ -394,7 +403,15 @@ namespace ATC {
     bool trackCharge_;
     /** temperature definition model */
     TemperatureDefType temperatureDef_;
+    /** recovery flux and send to output */
+    bool outputFlux_;
     /*@}*/
+
+    //---------------------------------------------------------------
+    /** special case of Swartz coupling with only dirichlet information */
+    bool schwarzCoupling_;
+    std::set<int> schwarzCouplingNodeSet_;
+    virtual void set_schwarz_nodes() {};
 
     //---------------------------------------------------------------
     /** \name managers */
@@ -406,8 +423,10 @@ namespace ATC {
     PhysicsModel * physicsModel_;
     /** manager for extrinsic models */
     ExtrinsicModelManager extrinsicModelManager_;
-    /** manager for regulator */
+    /** managers for regulators */
     AtomicRegulator * atomicRegulator_;
+    std::vector<AtomicRegulator *> atomicRegulators_;
+    mutable std::vector<AtomicRegulator * >::iterator _rIt_;
     /** managers for time integrators per field */
     std::map<FieldName,TimeIntegrator * > timeIntegrators_;
     /** time integrator iterator */
@@ -491,6 +510,8 @@ namespace ATC {
     // DATA structures for tracking individual species and molecules
     FIELD_POINTERS atomicFields_;
     /*@}*/
+
+    std::set<FieldName> requestedAverages_;
 
     // workspace variables
     mutable DENS_MAT _deltaQuantity_;

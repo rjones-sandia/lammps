@@ -50,6 +50,7 @@ namespace ATC {
 
     // set up atomic regulator
     atomicRegulator_ = new Thermostat(this);
+    atomicRegulators_.push_back(atomicRegulator_);
 
     // set up physics specific time integrator and thermostat
     timeIntegrators_[TEMPERATURE] = new ThermalTimeIntegrator(this,TimeIntegrator::GEAR);
@@ -346,13 +347,16 @@ namespace ATC {
   void ATC_CouplingEnergy::output()
   {
     if (output_now()) {
+      DENS_MAT heatFlux;
+      if (outputFlux_) compute_flux(TEMPERATURE,heatFlux);
+
       feEngine_->departition_mesh();
 
       // avoid possible mpi calls
       if (nodalAtomicKineticTemperature_)
         _keTemp_ = nodalAtomicKineticTemperature_->quantity();
       if (nodalAtomicConfigurationalTemperature_)
-      _peTemp_ = nodalAtomicConfigurationalTemperature_->quantity();
+        _peTemp_ = nodalAtomicConfigurationalTemperature_->quantity();
       
       OUTPUT_LIST outputData;
         
@@ -364,7 +368,7 @@ namespace ATC {
         (_tiIt_->second)->post_process();
       }
 
-      // auxiliary data
+      // auxilliary data
       for (_tiIt_ = timeIntegrators_.begin(); _tiIt_ != timeIntegrators_.end(); ++_tiIt_) {
         (_tiIt_->second)->output(outputData);
       }
@@ -402,6 +406,8 @@ namespace ATC {
         outputData["ddot_temperature"] = &ddotTemperature;
         outputData["NodalAtomicPower"] = &rocTemperature;
         outputData["fePower"] = &fePower;
+
+        if (outputFlux_) { outputData["heat_flux"] = &heatFlux; }
 
         // write data
         feEngine_->write_data(output_index(), fields_, & outputData);

@@ -19,7 +19,7 @@
 //  
 //*****************************************************************
 
-#include <cmath>
+#include <math.h>
 
 
 template<class Real>

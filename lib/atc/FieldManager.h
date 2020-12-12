@@ -123,7 +123,7 @@ namespace ATC {
     DENS_MAN * projected_atom_quantity(FieldName field,std::string name, PAQ * atomic,  DIAG_MAN * normalization = nullptr);
     DENS_MAN * scaled_projected_atom_quantity(FieldName field,std::string name, PAQ * atomic, double scale, DIAG_MAN * normalization = nullptr);
     DENS_MAN * referenced_projected_atom_quantity(FieldName field, std::string name, PAQ * atomic, DENS_MAN * reference, DIAG_MAN * normalization = nullptr);
-    DENS_MAN * inferred_atom_quantity(FieldName /* field */, std::string /* name */, PAQ * /* atomic */){return nullptr;};
+    DENS_MAN * inferred_atom_quantity(FieldName field, std::string name, PAQ * atomic){return nullptr;};
     PAQ * prolonged_field(FieldName field);
   private:
     FieldManager(void);

@@ -5,7 +5,7 @@
 #include <cstdlib>
 #include "CbPotential.h"
 #include "LammpsInterface.h"
-#include "MANYBODY/pair_eam.h"
+#include "pair_eam.h"
 
 namespace ATC
 {

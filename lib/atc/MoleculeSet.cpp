@@ -165,7 +165,7 @@ namespace ATC {
   //  Constructor
   //--------------------------------------------------------
   SmallMoleculeSet::SmallMoleculeSet(ATC_Method * atc, int groupBit,
-                                     PerAtomQuantity<int> * bondList, PerAtomQuantity<int> * /* numBond */) :
+                                     PerAtomQuantity<int> * bondList, PerAtomQuantity<int> * numBond) :
     MoleculeSet(atc,groupBit),
     bondList_(bondList)
   {
@@ -189,13 +189,13 @@ namespace ATC {
   //--------------------------------------------------------
   //  initialize
   //--------------------------------------------------------
-  void SmallMoleculeSet::initialize(std::map<int, double> * globalAtomsPerMolecule)
+  void SmallMoleculeSet::initialize()
   {
     // make sure newton_bond is off, otherwise use large molecule set
     if (lammps_->newton_bond())
       throw ATC_Error("Cannot use newton_bond with small molecules");
 
-    MoleculeSet::initialize(globalAtomsPerMolecule);
+    MoleculeSet::initialize();
   }
 
   //--------------------------------------------------------

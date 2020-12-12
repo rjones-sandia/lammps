@@ -71,11 +71,9 @@ void PhysicsModel::parse_material_file(string fileName)
     if (line.size() == 0 || line[0] == "#") continue;
     if (line[0] == "material") {
       string tag = line[1];
-      Material * mat = new Material(tag,fileId);
-      materials_.push_back(mat);
-      materialNameToIndexMap_[tag] = index++;
+      string units;
       if (line.size() > 2) {
-        string units = line[2];
+        units = line[2];
         stringstream ss;
         ss << "WARNING: material units " << units << " do not match lammps";
         if      (units == "SI") {
@@ -95,8 +93,11 @@ void PhysicsModel::parse_material_file(string fileName)
         }
       }
       else {
-        throw ATC_Error("units need to be specified in material file");
+        throw ATC_Error("units need to be specfied in material file"); 
       }
+      Material * mat = new Material(tag,fileId,units);
+      materials_.push_back(mat);
+      materialNameToIndexMap_[tag] = index++;
     }
   }
   if (int(materials_.size()) == 0) {

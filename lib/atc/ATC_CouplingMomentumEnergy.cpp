@@ -54,6 +54,7 @@ namespace ATC {
 
     // set up atomic regulator
     atomicRegulator_ = new KinetoThermostat(this);
+    atomicRegulators_.push_back(atomicRegulator_);
 
     // set up physics specific time integrator and thermostat
     trackDisplacement_ = true;
@@ -319,9 +320,11 @@ namespace ATC {
   //  modify
   //    parses inputs and modifies state of the filter
   //--------------------------------------------------------
-  bool ATC_CouplingMomentumEnergy::modify(int /* narg */, char ** /* arg */)
+  bool ATC_CouplingMomentumEnergy::modify(int narg, char **arg)
   {
-    return false;
+    bool foundMatch = false;
+    int argIndex = 0;
+    return foundMatch;
   }
 
   //--------------------------------------------------------------------
@@ -446,7 +449,7 @@ namespace ATC {
         (_tiIt_->second)->post_process();
       }
 
-      // auxiliary data
+      // auxilliary data
       
       for (_tiIt_ = timeIntegrators_.begin(); _tiIt_ != timeIntegrators_.end(); ++_tiIt_) {
         (_tiIt_->second)->output(outputData);

@@ -22,6 +22,10 @@ using std::set;
 using std::pair;
 using std::vector;
 
+const double tol = 1.e-8; 
+const double zero_tol = 1.e-12; 
+const double f_tol = 1.e-8; 
+
 namespace ATC {
 
   //--------------------------------------------------------
@@ -94,6 +98,7 @@ namespace ATC {
   bool ExtrinsicModelDriftDiffusion::modify(int narg, char **arg)
   {
     bool match = false;
+    int argIndx = 0;
     if (!match) {
       match = ExtrinsicModelTwoTemperature::modify(narg, arg);
     }
@@ -264,7 +269,7 @@ namespace ATC {
     Array2D <bool> rhsMask(NUM_FIELDS,NUM_FLUX); rhsMask = false;
     rhsMask(ELECTRON_DENSITY,FLUX) = true;
     rhsMask(ELECTRIC_POTENTIAL,FLUX) = true;
-    atc_->compute_flux(rhsMask,atc_->fields_,fluxes_,physicsModel_);
+    atc_->compute_fluxes(rhsMask,atc_->fields_,fluxes_,physicsModel_);
 //(fluxes_[ELECTRON_DENSITY][0]).print("J_x");
     outputData["electron_flux_x"]      = & fluxes_[ELECTRON_DENSITY][0];
     outputData["electron_flux_y"]      = & fluxes_[ELECTRON_DENSITY][1];

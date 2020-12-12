@@ -17,6 +17,7 @@ namespace ATC {
 // Forward declarations
 class FE_Engine;
 class StressCauchyBorn;
+class Stress;
 class TimeFilter;
 
 class ATC_Transfer : public ATC_Method {
@@ -119,6 +120,9 @@ class ATC_Transfer : public ATC_Method {
   void compute_eshelby_stress(DENS_MAT & eshebly_stress,
     const DENS_MAT &  energy, const DENS_MAT & stress, 
     const DENS_MAT & displacement_gradient);
+  void compute_m_kernel(DENS_MAT & m_kernel,
+    const DENS_MAT & eshebly_stress, const DENS_MAT & stress, 
+    const DENS_MAT & displacement);
   void cauchy_born_stress(const DENS_MAT &dudx, DENS_MAT &T, const DENS_MAT *temp=0);
   void cauchy_born_energy(const DENS_MAT &dudx, DENS_MAT &T, const DENS_MAT *temp=0);
   void cauchy_born_entropic_energy(const DENS_MAT &dudx, DENS_MAT &E, const DENS_MAT & T);
@@ -126,11 +130,12 @@ class ATC_Transfer : public ATC_Method {
     const DENS_MAT & T, const DENS_MAT & displacement_gradient);
   void compute_polar_decomposition(DENS_MAT & rotation,
     DENS_MAT & stretch, const DENS_MAT & displacement_gradient);
+  void compute_eigenvectors(DENS_MAT & evectors,
+    const DENS_MAT & M);
   void compute_elastic_deformation_gradient(DENS_MAT & elastic_def_grad,
     const DENS_MAT & stress, const DENS_MAT & displacement_gradient);
-  void compute_elastic_deformation_gradient2(DENS_MAT & elastic_def_grad,
-    const DENS_MAT & stress, const DENS_MAT & displacement_gradient);
   /** hybrid computes? */
+  void compute_virial_strain(DENS_MAT & Fe,const DENS_MAT & S);
   void compute_electric_potential(DENS_MAT & electric_potential);
   void compute_vacancy_concentration(DENS_MAT & vacancy_concentration,
     const DENS_MAT & displacement_gradient,
@@ -224,7 +229,8 @@ class ATC_Transfer : public ATC_Method {
   int nComputes_;
 
   /** workset data */
-  VectorDependencyManager<SPAR_MAT * > * gradientMatrix_;
+  //VectorDependencyManager<SPAR_MAT * > * gradientMatrix_;
+  SPAR_MAT_VEC gradientMatrix_;
 
   
   SPAR_MAT atomicBondMatrix_;
@@ -242,12 +248,14 @@ class ATC_Transfer : public ATC_Method {
   bool dxaExactMode_;
 
   /** a continuum model to compare to and/or estimate  quantities */
-  StressCauchyBorn * cauchyBornStress_;
-
-  Array<TimeFilter *> timeFilters_;
+  //StressCauchyBorn * cauchyBornStress_;
+  Stress * cauchyBornStress_;
 
   /** check consistency of fieldFlags_ */
   void check_field_dependencies(); 
+  bool needsBondMatrix_;
+  bool useVirial_; // use virial compute in place of hardy STRESS
+  std::string virialName_;
 
 };
 

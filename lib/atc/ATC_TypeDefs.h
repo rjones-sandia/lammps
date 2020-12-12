@@ -140,10 +140,16 @@ namespace ATC
       VACANCY_CONCENTRATION,
       ROTATION,
       STRETCH,
+      PRINCIPAL_STRETCHES,
+      //PRINCIPAL_STRETCH_VECTORS,
+      PRINCIPAL_STRESSES,
+      //PRINCIPAL_STRESS_VECTORS,
       DIPOLE_MOMENT,
       QUADRUPOLE_MOMENT,
       CAUCHY_BORN_ELASTIC_DEFORMATION_GRADIENT,
+      VIRIAL_STRAIN,
       DISLOCATION_DENSITY,
+      M_KERNEL,
       NUM_TOTAL_FIELDS 
   };
   const int NUM_FIELDS = ELECTRON_WAVEFUNCTION+1; 
@@ -187,10 +193,14 @@ namespace ATC
     1, //  VACANCY_CONCENTRATION,
     NDIM*NDIM, //  ROTATION,
     NDIM*NDIM, //  STRETCH,
+    NDIM*NDIM, //  PRINCIPAL_STRETCHES
+    NDIM*NDIM, //  PRINCIPAL_STRESSES
     NDIM, // DIPOLE_MOMENT,
     NDIM, // QUADRUPOLE_MOMENT,
     NDIM*NDIM, //  CAUCHY_BORN_ELASTIC_DEFORMATION_GRADIENT,
-    NDIM*NDIM //  DISLOCATION_DENSITY
+    NDIM*NDIM, //  VIRIAL_STRAIN 
+    NDIM*NDIM, //  DISLOCATION_DENSITY
+    NDIM //  M_KERNEL
   };
 
   enum NodalAtomicFieldNormalization { 
@@ -303,6 +313,14 @@ namespace ATC
       return "rotation";
     case STRETCH:
       return "stretch";
+    case PRINCIPAL_STRETCHES:
+      return "principal_stretches";
+    //case PRINCIPAL_STRETCH_VECTORS:
+    //  return "principal_stretch_vectors";
+    case PRINCIPAL_STRESSES:
+      return "principal_stresses";
+    //case PRINCIPAL_STRESS_VECTORS:
+    //  return "principal_stress_vectors";
     case DIPOLE_MOMENT:
       return "dipole_moment";
     case QUADRUPOLE_MOMENT:
@@ -310,7 +328,7 @@ namespace ATC
     default:
       throw ATC_Error("field not found in field_to_string");
     }
-  }
+  };
 
   /** string to field enum */
   inline FieldName string_to_field(const std::string & name) 
@@ -389,13 +407,21 @@ namespace ATC
       return ROTATION;
     else if (name=="stretch")
       return STRETCH;
+    else if (name=="principal_stretches")
+      return PRINCIPAL_STRETCHES;
+    //else if (name=="principal_stretch_vectors")
+    //  return PRINCIPAL_STRETCH_VECTORS;
+    else if (name=="principal_stresses")
+      return PRINCIPAL_STRESSES;
+    //else if (name=="principal_stress_vectors")
+    //  return PRINCIPAL_STRESS_VECTORS;
     else if (name=="dipole_moment")
       return DIPOLE_MOMENT;
     else if (name=="quadrupole_moment")
       return QUADRUPOLE_MOMENT;
     else
       throw ATC_Error(name + " is not a valid field");
-  }
+  };
 
   inline bool is_intrinsic(const FieldName & field_enum) 
   {
@@ -410,7 +436,7 @@ namespace ATC
       || field_enum==REFERENCE_POTENTIAL_ENERGY
      )   return true;
     else return false;
-  }
+  };
 
   inline std::string field_to_intrinsic_name(const FieldName index) 
   {
@@ -457,7 +483,7 @@ namespace ATC
     }
 
     return true;
-  }
+  };
 
   /** solver types */
   enum SolverType { DIRECT=0, ITERATIVE};
@@ -529,6 +555,7 @@ namespace ATC
   typedef std::map<std::string, ATC::MatrixDependencyManager<ATC_matrix::DenseMatrix, double> > TAG_FIELDS;
   typedef std::map<FieldName, std::vector<ATC::MatrixDependencyManager<ATC_matrix::DenseMatrix, double> > > GRAD_FIELDS;
   typedef std::map<FieldName, std::vector<ATC_matrix::DenseMatrix<double> > > GRAD_FIELD_MATS;
+  typedef std::vector<ATC_matrix::DenseMatrix<double> > GRAD_MAT;
   typedef std::map<FieldName, ATC::MatrixDependencyManager<DiagonalMatrix, double> > MASS_MATS;
   typedef std::map<FieldName, ATC::MatrixDependencyManager<SparseMatrix, double> > CON_MASS_MATS;
   typedef ATC::MatrixDependencyManager<ATC_matrix::DenseMatrix, double> DENS_MAN;
@@ -557,6 +584,7 @@ namespace ATC
   typedef std::map<std::string, ATC::MatrixDependencyManager<ATC_matrix::DenseMatrix, double> > ATOMIC_DATA;
   
   /** typedefs for FE_Mesh */
+  typedef std::set<int >  NODE_SET;
   typedef std::map<std::string, std::set<int > > NODE_SET_MAP;
   typedef std::map<std::string, std::set<int > > ELEMENT_SET_MAP;
   typedef std::map<std::string, std::set<PAIR> > FACE_SET_MAP;
@@ -577,7 +605,7 @@ namespace ATC
     else if (dir == 'z') index = 2;
     else return false;
     return true;
-  }
+  };
 
   /** string to index */
   inline std::string index_to_string(const int &index)
@@ -586,7 +614,7 @@ namespace ATC
     else if (index==1) return "y";
     else if (index==2) return "z";
     return "unknown";
-  }
+  };
 
   /** string to index */
   inline bool string_to_index(const std::string &dim, int &index)
@@ -601,7 +629,7 @@ namespace ATC
       return false;
 
     return true;
-  }
+  };
 
   inline std::string print_mask(const Array2D<bool> & rhsMask) 
   {

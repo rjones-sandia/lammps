@@ -81,7 +81,7 @@ DenseMatrix<double> inv(const MATRIX& A)
   GCK(A,A,info<0,"DenseMatrix::inv() dgetri error: Argument had bad value.");
   GCHK(info>0,"DenseMatrix::inv() dgetri error: Matrix not invertible.");
   
-  // Work size query succeeded
+  // Work size query succeded
   lwork = (int)work_dummy[0];  
   double *work = new double[lwork];    // Allocate vector of appropriate size
 
@@ -186,9 +186,12 @@ DenseMatrix<double>  polar_decomposition(const MATRIX& AA,
   DENS_MAT A(AA);  // Make copy of A 
   SQCK(A, "DenseMatrix::polar_decomposition(), matrix not square"); 
   int m = A.nRows(); // size
+#if 1
+  DENS_MAT U,D,VT;
+  singular_value_decomposition(AA,U,D,VT);
+#else
   DENS_MAT D(m,1); 
   DENS_MAT U(m,m), VT(m,m); // left and right SVD rotations
-
   // workspace 
   int lwork=-1; 
   double tmp[1];
@@ -212,6 +215,7 @@ DenseMatrix<double>  polar_decomposition(const MATRIX& AA,
   GCK(A,A,info!=0,"DenseMatrix::polar_decomposition(), error");
   delete [] work;
 
+#endif
 
   //rotation.resize(m,m);
   rotation = U*VT;
@@ -238,6 +242,67 @@ DenseMatrix<double>  polar_decomposition(const MATRIX& AA,
     stretch = stretch*(U.transpose());
   }
   return D; 
+}
+//-----------------------------------------------------------------------------
+//* returns singular value decomposition of a square double precision matrix 
+//-----------------------------------------------------------------------------
+void singular_value_decomposition(const MATRIX& AA, 
+  DenseMatrix<double> & U,
+  DenseMatrix<double> & D,
+  DenseMatrix<double> & VT)
+{
+  DENS_MAT A(AA);  // Make copy of A 
+  int m = A.nRows(); // size
+  int n = A.nCols(); // size
+  D.reset(m,1); 
+  U.reset(m,m); 
+  VT.reset(n,n); // left and right SVD rotations
+
+  // workspace 
+  int lwork=-1; 
+  double tmp[1];
+  double *work = tmp;
+  
+  // calculate singular value decomposition A = U D V^T 
+  char type[] = "A"; // all columns are returned
+  int info;
+  // query optimal sizes
+  dgesvd_(type,type,&m,&m,A.ptr(),&m,D.ptr(),
+    U.ptr(),&m,VT.ptr(),&m,
+    work,&lwork,&info); // simple: svd, div&conq: sdd
+  lwork = int(work[0]); // returns optimal size  LWOPT = WORK(1)
+  work = new double[lwork];
+  // compute SVD
+  dgesvd_(type,type,&m,&m,A.ptr(),&m,D.ptr(),
+    U.ptr(),&m,VT.ptr(),&m,
+    work,&lwork,&info);
+  GCK(A,A,info!=0,"DenseMatrix::singular_value_decomposition(), error");
+  delete [] work;
+}
+//-----------------------------------------------------------------------------
+//* returns (scaled) eigenvectors
+//-----------------------------------------------------------------------------
+void eigenvectors(const MATRIX& AA, DenseMatrix<double> & U, bool normalize)
+{
+  const double tol = 1.e-10;
+  DENS_MAT A(AA);  // Make copy of A 
+  SQCK(A, "DenseMatrix::eigenvectors(), matrix not square"); 
+  int m = A.nRows(); // size
+  DENS_MAT D,VT;
+  singular_value_decomposition(AA,U,D,VT); 
+  for (int i = 0; i < m; ++i) {
+    double eval = D(i,0);
+    for (int j = 0; j < m; ++j) {
+      double u = U(j,i);
+      if ( fabs(u) > tol ) {
+        if ( u < 0.) eval = -eval;
+        break;
+      }
+    }
+    for (int j = 0; j < m; ++j) {
+      U(j,i) *= eval;
+    }
+  }
 }
 //-----------------------------------------------------------------------------
 //* computes the determinant of a square matrix by LU decomposition (if n>3)
@@ -287,7 +352,7 @@ double det(const MATRIX& A)
 double max_eigenvalue(const Matrix<double>& A)
 {
 
-  GCK(A,A,!A.is_size(3,3), "max_eigenvalue only implemented for 3x3");
+  GCK(A,A,!A.is_size(3,3), "max_eigenvalue only implimented for 3x3");
   const double c0 = det(A);
   const double c1 = A(1,0)*A(0,1) + A(2,0)*A(0,2) + A(1,2)*A(2,1) 
                   - A(0,0)*A(1,1) - A(0,0)*A(2,2) - A(1,1)*A(2,2);

@@ -6,7 +6,7 @@
 #include "OutputManager.h"
 #include "Utility.h"
 #include <sstream>
-#include <cassert>
+#include <assert.h>
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -20,6 +20,7 @@ using ATC_Utility::dbl_geq;
 using ATC_Utility::parse_min;
 using ATC_Utility::parse_max;
 using ATC_Utility::parse_minmax;
+using ATC_Utility::parse_direction;
 using ATC_Utility::split_values;
 using ATC_Utility::plane_coords;
 using ATC_Utility::norm3;
@@ -47,6 +48,7 @@ namespace ATC {
     nNodes_(0), 
     nNodesUnique_(0),
     feElement_(nullptr),
+    type_(""),
     twoDimensional_(false),
     hasPlanarFaces_(false)
 
@@ -170,7 +172,24 @@ namespace ATC {
       \section default
       Coordinates are assumed to be in lattice units.
     */
-      else if (strcmp(arg[1],"create_nodeset")==0) {
+   /*! \page man_mesh_add_to_nodeset fix_modify AtC mesh add_to_nodeset
+      \section syntax
+      fix_modify AtC mesh add_to_nodeset <id>
+      <xmin> <xmax> <ymin> <ymax> <zmin> <zmax>
+      - <id> = id of FE nodeset to be added to 
+      - <xmin> <xmax> <ymin> <ymax> <zmin> <zmax> = coordinates of
+      the bounding box that contains the desired nodes to be added
+      \section examples
+      <TT> fix_modify AtC mesh add_to_nodeset lbc -11.9 -11 -12 12 -12 12 </TT>
+      \section description
+      Command to add nodes to an already existing FE nodeset.
+      \section restrictions
+      \section related
+      \section default
+      Coordinates are assumed to be in lattice units.
+    */
+      else if ( (strcmp(arg[1],"create_nodeset")==0) ||
+                (strcmp(arg[1],"add_to_nodeset")==0) ) {
         int argIdx = 2;
         string tag  = arg[argIdx++];
         double xmin, xmax, ymin, ymax, zmin, zmax;
@@ -198,34 +217,12 @@ namespace ATC {
         if (ymin == ymax) split_values(ymin,ymax);
         if (zmin == zmax) split_values(zmin,zmax);
         parse_units(argIdx,narg,arg, xmin,xmax,ymin,ymax,zmin,zmax);
-        create_nodeset(tag, xmin, xmax, ymin, ymax, zmin, zmax);
-        match = true;
-      }
-   /*! \page man_mesh_add_to_nodeset fix_modify AtC mesh add_to_nodeset
-      \section syntax
-      fix_modify AtC mesh add_to_nodeset <id>
-      <xmin> <xmax> <ymin> <ymax> <zmin> <zmax>
-      - <id> = id of FE nodeset to be added to 
-      - <xmin> <xmax> <ymin> <ymax> <zmin> <zmax> = coordinates of
-      the bounding box that contains the desired nodes to be added
-      \section examples
-      <TT> fix_modify AtC mesh add_to_nodeset lbc -11.9 -11 -12 12 -12 12 </TT>
-      \section description
-      Command to add nodes to an already existing FE nodeset.
-      \section restrictions
-      \section related
-      \section default
-      Coordinates are assumed to be in lattice units.
-    */
-      else if (strcmp(arg[1],"add_to_nodeset")==0) {
-        string tag  = arg[2];
-        double xmin = parse_min(arg[3]);
-        double xmax = parse_max(arg[4]);
-        double ymin = parse_min(arg[5]);
-        double ymax = parse_max(arg[6]);
-        double zmin = parse_min(arg[7]);
-        double zmax = parse_max(arg[8]);
-        add_to_nodeset(tag, xmin, xmax, ymin, ymax, zmin, zmax);
+        if (strcmp(arg[1],"add_to_nodeset")==0) {
+          add_to_nodeset(tag, xmin, xmax, ymin, ymax, zmin, zmax);
+        }
+        else {
+          create_nodeset(tag, xmin, xmax, ymin, ymax, zmin, zmax);
+        }
         match = true;
       }
    /*! \page man_mesh_create_elementset fix_modify AtC mesh create_elementset
@@ -335,6 +332,16 @@ namespace ATC {
         output(outputPrefix);
         match = true;
       }
+      // hints for point-to-element projection
+      else if (strcmp(arg[1],"planar")==0) {
+        int dir = parse_direction(arg[2]);
+        feElement_->set_planar_normal(dir);
+        match = true;
+      }
+      else if (strcmp(arg[1],"planar_faces")==0) {
+        feElement_->set_planar_faces();
+        match = true;
+      }
     }
     return match;
   }
@@ -419,6 +426,22 @@ namespace ATC {
       if (feElement_->order()< 3) hasPlanarFaces_ = true; 
       ATC::LammpsInterface::instance()->print_msg_once(" mesh is two dimensional");
     }
+  }
+  // -------------------------------------------------------------
+  //   check
+  // -------------------------------------------------------------
+  bool FE_Mesh::check(void) 
+  {
+    DENS_MAT eltCoords;
+    for (int ielem = 0; ielem < nElts_; ielem++) {
+      element_coordinates(ielem,eltCoords);
+      bool ok = feElement_->check(eltCoords); 
+      if (! ok ) {
+        throw ATC_Error("mesh failed check");
+        return false;
+      }
+    }
+    return true;
   }
   //-----------------------------------------------------------------
   
@@ -659,6 +682,27 @@ namespace ATC {
   }
 
   // -------------------------------------------------------------
+  //   create_elementset
+  // -------------------------------------------------------------
+  void FE_Mesh::create_elementset(const string & name,
+                               const set<int> & elemSet)
+  {
+    // Make sure we don't already have a nodeset with this name
+    ELEMENT_SET_MAP::iterator iter = elementSetMap_.find(name);
+    if (iter != elementSetMap_.end()) {
+      string message("WARNING: A elementset with name " + name + " is already defined.");
+      ATC::LammpsInterface::instance()->print_msg_once(message);
+    }
+    elementSetMap_[name] = elemSet;
+
+    if (ATC::LammpsInterface::instance()->rank_zero()) { 
+      stringstream ss;
+      ss << "created elementset " << name 
+         << " with " << elemSet.size() << " nodes";
+      ATC::LammpsInterface::instance()->print_msg_once(ss.str());
+    }
+  }
+  // -------------------------------------------------------------
   //   get_elementset
   // -------------------------------------------------------------
   const set<int> & FE_Mesh::elementset(const string & name) const
@@ -797,7 +841,7 @@ namespace ATC {
         {
           int node = element_connectivity_unique(ielem, inode);
           nodeSet.insert(node);
-          inode++; // XXX: is this correct?
+          inode++;
         }
       }
     }
@@ -832,7 +876,7 @@ namespace ATC {
         {
           int node = element_connectivity_unique(ielem, inode);
           nodeSet.erase(node);
-          inode++; // XXX: is this correct?
+          inode++;
         }
       }
     }
@@ -869,6 +913,27 @@ namespace ATC {
     for (int ielem = 0; ielem < nElts_; ielem++) 
     {
       if(elemSet.find(ielem) == elemSet.end() ) cElemSet.insert(ielem);
+    }
+  }
+  // -------------------------------------------------------------
+  //   create_faceset
+  // -------------------------------------------------------------
+  void FE_Mesh::create_faceset(const string & name,
+                               const set<PAIR> & faceSet)
+  {
+    // Make sure we don't already have a nodeset with this name
+    FACE_SET_MAP::iterator iter = faceSetMap_.find(name);
+    if (iter != faceSetMap_.end()) {
+      string message("WARNING: A faceset with name " + name + " is already defined.");
+      ATC::LammpsInterface::instance()->print_msg_once(message);
+    }
+    faceSetMap_[name] = faceSet;
+
+    if (ATC::LammpsInterface::instance()->rank_zero()) { 
+      stringstream ss;
+      ss << "created faceset " << name 
+         << " with " << faceSet.size() << " nodes";
+      ATC::LammpsInterface::instance()->print_msg_once(ss.str());
     }
   }
   // -------------------------------------------------------------
@@ -955,6 +1020,27 @@ namespace ATC {
       }
     }
   }
+  // -------------------------------------------------------------
+  //   faceset_to_elementset
+  // -------------------------------------------------------------
+  void FE_Mesh::faceset_to_elementset(const string &name, set<int> &elemSet) const
+  {
+    if (name == "all") {
+      for (int ielem = 0; ielem < num_elements(); ielem++)
+        elemSet.insert(ielem);
+    }
+    else {
+      FACE_SET_MAP::const_iterator faceset = faceSetMap_.find(name);
+      if (faceset == faceSetMap_.end()) 
+        throw ATC_Error( "No faceset with name " + name + " found.");
+      const set<PAIR> & faceSet = faceset->second;
+      set<PAIR>::const_iterator iter;
+      for (iter = faceSet.begin(); iter != faceSet.end(); iter++) {
+        int ielem = iter->first;
+        elemSet.insert(ielem);
+      }
+    }
+  }
 
   // -------------------------------------------------------------
   //   get_faceset
@@ -978,8 +1064,8 @@ namespace ATC {
     // Make sure we don't already have a nodeset with this name
     NODE_SET_MAP::iterator iter = nodeSetMap_.find(name);
     if (iter != nodeSetMap_.end()) {
-      string message("A nodeset with name " + name + " is already defined.");
-      throw ATC_Error( message);
+      string message("WARNING: A nodeset with name " + name + " is already defined.");
+      ATC::LammpsInterface::instance()->print_msg_once(message);
     }
     nodeSetMap_[name] = nodeSet;
 
@@ -1032,6 +1118,26 @@ namespace ATC {
       ss << "created nodeset " << name 
          << " with " << nodeSet.size() << " nodes";
       ATC::LammpsInterface::instance()->print_msg_once(ss.str());
+    }
+  }
+
+  // -------------------------------------------------------------
+  //   print_nodesets
+  // -------------------------------------------------------------
+  void FE_Mesh::print_nodesets() const 
+  {
+    NODE_SET_MAP::const_iterator iter;
+    NODE_SET::const_iterator itr;
+    for (iter = nodeSetMap_.begin(); iter != nodeSetMap_.end(); iter++) {
+      stringstream ss;
+      ss << iter->first <<":";
+      const NODE_SET & nset =  iter->second;
+      for (itr = nset.begin(); itr != nset.end(); itr++) {
+        ss << *itr <<" ";
+      }
+      if (ATC::LammpsInterface::instance()->rank_zero()) { 
+        ATC::LammpsInterface::instance()->print_msg_once(ss.str());
+      }
     }
   }
 
@@ -1654,7 +1760,16 @@ namespace ATC {
       faceset_to_nodeset(name,nset);
       set<int>::const_iterator iter;
       for (iter = nset.begin(); iter != nset.end(); iter++) {
-        (facesets[faceset])(*iter,0) = 1;
+        (facesets[faceset])(*iter,0) = 4;
+      }
+      set<int> eset;
+      faceset_to_elementset(name,eset);
+      for (iter = eset.begin(); iter != eset.end(); iter++) {
+        Array<int> nodes;
+        element_connectivity_unique(*iter, nodes);
+        for(int i = 0; i < nodes.size(); ++i) {
+          (facesets[faceset])(nodes(i),0) += 1; 
+        }
       }
       subsetData[faceset] = & facesets[faceset];
     }
@@ -1788,7 +1903,7 @@ namespace ATC {
   // -------------------------------------------------------------
   //  setup_periodicity
   // -------------------------------------------------------------
-  void FE_3DMesh::setup_periodicity(double /* tol */)
+  void FE_3DMesh::setup_periodicity(double tol)
   {
     // unique <-> global id maps
     globalToUniqueMap_.reset(nNodes_);
@@ -2119,9 +2234,10 @@ namespace ATC {
       // divide between all processors, we get the next-highest
       // power of 2.
     vector<vector<int> > procEltLists = tree_->getElemIDs(depth);
+    int numEltLists = procEltLists.size();
     
     // Make sure the KD tree is behaving as expected.
-    assert(procEltLists.size() >= nProcs);
+    assert(numEltLists >= nProcs);
  
     // If the KD-tree was not able to return enough divisions,
     // duplicate the largest list.
@@ -2461,9 +2577,11 @@ namespace ATC {
     // Return the index of the parent element which does contain the point
     if (matches.size() == 1) {  // x is conclusively in a single element
       return matches[0];
-    } else if (matches.size() == 0) {  // not so much
+    } 
+    else if (matches.size() == 0) {  // not so much
       throw ATC_Error("FE_3DMesh::map_to_element could not find an element");
-    } else {  // definitely not so much
+    } 
+    else {  // definitely not so much
       throw ATC_Error("FE_3DMesh::map_to_element found multiple elements");
     }
   }
@@ -2617,6 +2735,7 @@ namespace ATC {
       }
     }
     setup_periodicity();
+    type_ = "rectangular";
   }
 
   // -------------------------------------------------------------
@@ -2893,6 +3012,18 @@ namespace ATC {
     }
 
     setup_periodicity();
+    type_ = "rectangular";
+
+    stringstream ss;
+    ss << "mesh bounds= " 
+       << borders_[0][0] << ": " << borders_[1][0] << ", "
+       << borders_[0][1] << ": " << borders_[1][1] << ", "
+       << borders_[0][2] << ": " << borders_[1][2] << ", "
+       << " increments " 
+       << dx_[0] << ", "
+       << dx_[1] << ", "
+       << dx_[2];
+    ATC::LammpsInterface::instance()->print_msg_once(ss.str());
   }
 
   // -------------------------------------------------------------

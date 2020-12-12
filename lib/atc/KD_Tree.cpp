@@ -1,5 +1,5 @@
 #include "KD_Tree.h"
-#include <cassert>
+#include <assert.h>
 
 using std::vector;
 

@@ -26,8 +26,7 @@ using std::vector;
 namespace ATC {
 
   Material::Material()
-    : rhoCp_(0),
-      heatCapacity_(0),
+    : heatCapacity_(0),
       electronHeatCapacity_(nullptr),
       massDensity_(0),
       heatConductivity_(0),
@@ -66,9 +65,9 @@ namespace ATC {
   //     coefficient   0.1
   //   end
   // end
-  Material::Material(string & tag, fstream &fileId)
+  Material::Material(string & tag, fstream &fileId, string units)
     : tag_(tag),
-      rhoCp_(0),
+      units_(units),
       heatCapacity_(0),
       electronHeatCapacity_(nullptr),
       massDensity_(0),
@@ -111,18 +110,17 @@ namespace ATC {
     linearSource_ = true;
     constantDensity_.reset(NUM_FIELDS);
     constantDensity_ = false;
-
     
-    rhoCp_ = ATC::LammpsInterface::instance()->heat_capacity();
-    parameters_["heat_capacity"] = rhoCp_;
-    heatCapacity_ = rhoCp_;
-    registry_.insert("heat_capacity");
-    registry_.insert("thermal_energy");
-    constantDensity_(TEMPERATURE) = true;
+    //REMOVErhoCp_ = ATC::LammpsInterface::instance()->heat_capacity();
+    //REMOVEparameters_["heat_capacity"] = rhoCp_;
+    //REMOVEheatCapacity_ = rhoCp_;
+    //REMOVEregistry_.insert("heat_capacity");
+    //REMOVEregistry_.insert("thermal_energy");
 
+    constantDensity_(TEMPERATURE) = true;
     constantDensity_(DISPLACEMENT) = true;
     constantDensity_(VELOCITY) = true;
-    electronDragPower_ = new ElectronDragPower(); 
+    
 
     vector<string> line;
     while(fileId.good()) {
@@ -150,7 +148,31 @@ namespace ATC {
       if      (line[0] == "heat_capacity") { // over-ride default
         registry_. insert("heat_capacity");
         registry_. insert("thermal_energy");
-        if (line[1] == "constant") {
+        if (line.size() == 1 || line[1] == "basis") {
+          if  (line.size() > 1 && line[1] == "basis") {
+            int n = line.size()-2;
+            if (n != LammpsInterface::instance()->ntypes()) ATC_Error("basis needs entries for each type");
+            int* numPerType = new int[n];
+            for (int i = 0; i < n; i++) {
+              numPerType[i] = str2int(line[i+2]);
+            }
+            LammpsInterface::instance()->set_atoms_per_unit_cell(numPerType);
+            delete [] numPerType;
+          }
+          heatCapacity_ = ATC::LammpsInterface::instance()->heat_capacity();
+          parameters_["heat_capacity"] = heatCapacity_;
+          stringstream ss;
+          ss << "computed heat capacity : " << heatCapacity_;
+          if      (units_ == "real")  { 
+            ss << " [amu/K-A-fs^2]";
+          }
+          else if (units_ == "metal") { 
+            ss << " [amu/K-A-ps^2]";
+          }
+          else throw ATC_Error("unknown units for heat_capacity");
+          ATC::LammpsInterface::instance()->print_msg_once(ss.str());
+        }
+        else if (line[1] == "constant") {
           while(fileId.good()) {
             command_line(fileId, line);
             if (line.size() == 0) continue;
@@ -188,6 +210,20 @@ namespace ATC {
             double value = str2dbl(line[1]);
             if (line[0] == "conductivity") {
               heatConductivity_ = value;
+              stringstream ss;
+              ss << "converted conductivity " << heatConductivity_ << " [W/mK] to " ;
+              if (line.size() > 2 && (line[2]=="w/mk" || line[2]=="w/m-k")) {
+                if      (units_ == "real")  { 
+                  heatConductivity_ *= WmK2real_;
+                  ss << heatConductivity_ << " [amu-A/K-fs^3]";
+                }
+                else if (units_ == "metal") { 
+                  heatConductivity_ *= WmK2metal_;
+                  ss << heatConductivity_ << " [amu-A/K-ps^3]";
+                }
+                else throw ATC_Error("unknown units for conductivity");
+                ATC::LammpsInterface::instance()->print_msg_once(ss.str());
+              }
             }
           }
         }
@@ -359,30 +395,22 @@ namespace ATC {
       else if (line[0] == "mass_density") { // over-ride default
         registry_. insert("mass_density");
         registry_. insert("kinetic_energy");
-        if (line.size() == 1 ) { // try to calculate from lattice
+        if (line.size() == 1 || line[1] == "basis") {
+          if  (line.size() > 1 && line[1] == "basis") {
+            int n = line.size()-2;
+            if (n != LammpsInterface::instance()->ntypes()) ATC_Error("basis needs entries for each type");
+            int* numPerType = new int[n];
+            for (int i = 0; i < n; i++) {
+              numPerType[i] = str2int(line[i+2]);
+            }
+            LammpsInterface::instance()->set_atoms_per_unit_cell(numPerType);
+            delete [] numPerType;
+          }
           massDensity_ = LammpsInterface::instance()->mass_density();
           parameters_["mass_density"] = massDensity_;
           stringstream ss;
-          ss << "computed mass density : " << massDensity_ ;
+          ss << "computed mass density: " << massDensity_ ;
           ATC::LammpsInterface::instance()->print_msg_once(ss.str());
-        }
-        else if (line[1] == "basis") {
-          while(fileId.good()) {
-            command_line(fileId, line);
-            if (line.size() == 0) continue;
-            if (line[0] == "end") break;
-            int n = line.size();
-            int* numPerType = new int[n];
-            for (int i = 0; i < n; i++) {
-              numPerType[i] = str2int(line[i]);
-            }
-            massDensity_ = LammpsInterface::instance()->mass_density(numPerType);
-            delete [] numPerType;
-            parameters_["mass_density"] = massDensity_;
-            stringstream ss;
-            ss << "computed mass density (from given basis) : " << massDensity_ ;
-            ATC::LammpsInterface::instance()->print_msg_once(ss.str());
-          }
         }
         else if (line[1] == "constant") {
           while(fileId.good()) {
@@ -419,23 +447,24 @@ namespace ATC {
       else if (line[0] == "stress") {
         registry_. insert("stress");
         registry_. insert("elastic_energy");
-        if      (line[1] == "linear") {
+        if      (line[1] == "linear" || line[1] == "cubic") {
           linearFlux_(VELOCITY) = true;
           linearFlux_(DISPLACEMENT) = true;
           if (stress_) delete stress_;
-          stress_ = new StressLinearElastic(fileId);
+          stress_ = new StressLinearElastic(fileId,units_);
         }
-        else if (line[1] == "cubic") {
+        else if ( (line[1] == "thermo-elastic_cubic") 
+               || (line[1] == "thermo-elastic_orthotropic") ) {
           linearFlux_(VELOCITY) = true;
           linearFlux_(DISPLACEMENT) = true;
           if (stress_) delete stress_;
-          stress_ = new StressCubicElastic(fileId);
+          stress_ = new StressLinearThermoElastic(fileId,units_);
         }
         else if (line[1] == "damped_cubic") {
           linearFlux_(VELOCITY) = true;
           linearFlux_(DISPLACEMENT) = true;
           if (stress_) delete stress_;
-          stress_ = new StressCubicElasticDamped(fileId);
+          stress_ = new StressLinearElasticDamped(fileId,units_);
         }
         else if (line[1] == "cauchy-born") {
           CbData cb;
@@ -485,13 +514,13 @@ namespace ATC {
             bodyForce_ = new BodyForceViscous(fileId,parameters_);
           }
           else {
-            if (bodyForce_) delete bodyForce_;
-            bodyForce_ = new BodyForce();
+            throw ATC_Error("unknown body_force type");
           }
         }
         else {
           if (bodyForce_) delete bodyForce_;
           bodyForce_ = new BodyForce();
+          //command_line(fileId, line); // read "end"
         }
       }
       else if (line[0] == "electron_flux") {
@@ -816,7 +845,7 @@ void Material::inv_effective_mass(
 };
 //---------------------------------------------------------------------
 void Material::heat_flux(
-  const FIELD_MATS & /* fields */,
+  const FIELD_MATS & fields,
   const GRAD_FIELD_MATS & gradFields,
   DENS_MAT_VEC & flux) const
 {
@@ -865,7 +894,7 @@ bool  Material::electron_drag_power(
 //---------------------------------------------------------------------
 bool Material::electron_recombination(
   const FIELD_MATS &fields,
-  const GRAD_FIELD_MATS & /* gradFields */,
+  const GRAD_FIELD_MATS &gradFields,
   DENS_MAT & recombination) const
 {
   // 1/tau (n - n0)
@@ -937,7 +966,7 @@ void Material::electron_flux(
 }
 //---------------------------------------------------------------------
 void Material::electric_field(
-  const FIELD_MATS & /* fields */,
+  const FIELD_MATS &fields,
   const GRAD_FIELD_MATS &gradFields,
   DENS_MAT_VEC &flux) const
 {
@@ -950,7 +979,7 @@ void Material::electric_field(
 }
 //---------------------------------------------------------------------
 void Material::electric_displacement(
-  const FIELD_MATS & /* fields */,
+  const FIELD_MATS &fields,
   const GRAD_FIELD_MATS &gradFields,
   DENS_MAT_VEC &flux) const
 {

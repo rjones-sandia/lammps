@@ -4,7 +4,7 @@
 #include "Array2D.h"
 #include "MatrixDef.h"
 #include "MatrixLibrary.h"
-#include <cmath>
+#include <math.h>
 #include <vector>
 #include <utility>
 

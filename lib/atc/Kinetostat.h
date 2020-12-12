@@ -129,11 +129,9 @@ namespace ATC {
                                 double dt=0.);
 
     /** apply any required corrections for localized kinetostats */
-    virtual void apply_localization_correction(const DENS_MAT & /* source */,
-                                               DENS_MAT & /* nodalField */,
-                                               double /* weight */){};
-    virtual void apply_localization_correction(const DENS_MAT & /* source */,
-                                               DENS_MAT & /* nodalField */){};
+    virtual void apply_localization_correction(const DENS_MAT & source,
+                                               DENS_MAT & nodalField,
+                                               double weight = 1.){};
 
     // member data
     /** nodeset corresponding to Hoover coupling */
@@ -763,7 +761,7 @@ namespace ATC {
     virtual void apply_post_corrector(double dt);
 
     /** compute boundary flux, requires thermostat input since it is part of the coupling scheme */
-    virtual void compute_boundary_flux(FIELDS & /* fields */)
+    virtual void compute_boundary_flux(FIELDS & fields)
       {boundaryFlux_[VELOCITY] = 0.;};
 
     /** determine if local shape function matrices are needed */
@@ -806,7 +804,7 @@ namespace ATC {
     /** change in restricted atomic FE momentum over a timestep */
     DENS_MAT deltaNodalAtomicMomentum_;
 
-    /** initial restricted atomic FE momentum used to compute change */
+    /** intial restricted atomic FE momentum used to compute change */
     DENS_MAT initialNodalAtomicMomentum_;
 
     /** filtered nodal atomic momentum */

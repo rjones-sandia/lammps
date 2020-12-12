@@ -199,9 +199,6 @@ namespace ATC {
   //--------------------------------------------------------
   void ExtrinsicModelTwoTemperature::pre_init_integrate()
   {
-#ifdef ATC_VERBOSE
-    ATC::LammpsInterface::instance()->print_msg_once("start ttm evolution",true,false);
-#endif
 
     double dt = atc_->lammpsInterface_->dt();
     double time = atc_->time();
@@ -217,9 +214,6 @@ namespace ATC {
       }
     }
 
-#ifdef ATC_VERBOSE
-    ATC::LammpsInterface::instance()->print_msg_once("...done",false,true);
-#endif
   }
 
   //--------------------------------------------------------

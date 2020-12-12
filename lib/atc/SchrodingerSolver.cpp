@@ -18,6 +18,7 @@ using std::min;
 using ATC_Utility::to_string;
 using ATC_Utility::sgn;
 
+const double tol = 1.e-8; 
 const double zero_tol = 1.e-12; 
 const double f_tol = 1.e-8; 
 
@@ -66,7 +67,7 @@ double fermi_dirac(const double E, const double T)
     M_ = sparseM.dense_copy();
   }
   //-----------------------------------------------------
-  bool SchrodingerSolver::solve(FIELDS & /* fields */)
+  bool SchrodingerSolver::solve(FIELDS & fields)
   {
 
 // typedef  struct{float real, imag;} COMPLEX;
@@ -132,7 +133,7 @@ double fermi_dirac(const double E, const double T)
   //--------------------------------------------------------
   // compute charge density per slice
   //--------------------------------------------------------
-  bool SliceSchrodingerSolver::solve(FIELDS & /* fields */)
+  bool SliceSchrodingerSolver::solve(FIELDS & fields)
   {
     // fields
     DENS_MAT & psi   = (atc_->field(ELECTRON_WAVEFUNCTION)).set_quantity();
@@ -250,7 +251,7 @@ double fermi_dirac(const double E, const double T)
   {
   }
   //----------------------------------------------------------
-  bool SchrodingerPoissonManager::modify(int /* narg */, char **arg)
+  bool SchrodingerPoissonManager::modify(int narg, char **arg)
   {
     bool match = false;
     int argIndx = 0;
@@ -350,7 +351,7 @@ double fermi_dirac(const double E, const double T)
   }
   //----------------------------------------------------------------------
 
-  void SchrodingerPoissonSolver::solve(FIELDS & rhs, GRAD_FIELD_MATS & /* fluxes */)
+  void SchrodingerPoissonSolver::solve(FIELDS & rhs, GRAD_FIELD_MATS & fluxes)
   {
     if ((atc_->prescribed_data_manager()->all_fixed(ELECTRON_WAVEFUNCTION))
      && (atc_->prescribed_data_manager()->all_fixed(ELECTRIC_POTENTIAL)))  {
@@ -555,7 +556,7 @@ double fermi_dirac(const double E, const double T)
       Array2D <bool> rhsMask(NUM_FIELDS,NUM_FLUX); rhsMask = false;
       rhsMask(ELECTRON_DENSITY,FLUX) = true;
 //#define WIP_REJ
-      atc_->compute_flux(rhsMask,atc_->fields_,fluxes,physicsModel_);
+      atc_->compute_fluxes(rhsMask,atc_->fields_,fluxes,physicsModel_);
       y = & ( fluxes[ELECTRON_DENSITY][oneDcoor_] ); 
     }
     BCS bcs;
@@ -739,7 +740,7 @@ double fermi_dirac(const double E, const double T)
     if (solver_) delete solver_;
   }
   //--------------------------------------------------------------------------
-  void GlobalSliceSchrodingerPoissonSolver::solve(FIELDS & rhs, GRAD_FIELD_MATS & /* fluxes */)
+  void GlobalSliceSchrodingerPoissonSolver::solve(FIELDS & rhs, GRAD_FIELD_MATS & fluxes)
   {
     const DENS_MAT & phi = (atc_->fields_[ELECTRIC_POTENTIAL]).quantity();
     const DENS_MAT & n   = (atc_->fields_[ELECTRON_DENSITY]  ).quantity();
@@ -778,6 +779,7 @@ double fermi_dirac(const double E, const double T)
   {
     std::cout << "******************HACK******************\n";
 
+    //const DENS_MAT & phi = (atc_->fields_[ELECTRIC_POTENTIAL]).quantity();
     DENS_MAT & n   = (atc_->fields_[ELECTRON_DENSITY]  ).set_quantity();
     DENS_MAT       & Ef  = (atc_->field(FERMI_ENERGY)).set_quantity();
     double T = 300;

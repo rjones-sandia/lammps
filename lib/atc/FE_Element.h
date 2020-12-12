@@ -70,10 +70,10 @@ namespace ATC {
     const Array2D<int> &local_face_conn() const { return localFaceConn_; }
 
     /** return volume of the element */
-    double vol() const { return vol_; }
+    const double vol() const { return vol_; } 
 
     /** return area of a face */
-    double face_area() const { return faceArea_; }
+    const double face_area() const { return faceArea_; } 
 
     // the following two are pass-throughs to the interpolate class, and
     // can thus only be declared in the class body (or else the
@@ -126,6 +126,9 @@ namespace ATC {
      *  dimension */
     void bounds_in_dim(const DENS_MAT &eltCoords, const int dim,
                        double &min, double &max) const;
+
+    /** sanity check for element */
+    virtual bool check(const DENS_MAT &eltCoords) {return true;}
 
     ///////////////////////////////////////////////////////////////////////////
     //
@@ -218,6 +221,8 @@ namespace ATC {
                           std::vector<DENS_VEC> & tangents,
                           const bool normalize=false) const; 
 
+    void set_planar_normal(int dir) { planarNormalDirection_ = dir; }
+    void set_planar_faces(bool has=true) { hasPlanarFaces_ = has; }
   protected:
 
     ///////////////////////////////////////////////////////////////////////////
@@ -253,7 +258,6 @@ namespace ATC {
     // Number of nodes in one dimension
     int numNodes1d_; 
 
-
     // local coords of nodes: localCoords_(isd, ip)
     DENS_MAT localCoords_;
 
@@ -269,7 +273,8 @@ namespace ATC {
     /** tolerance used in solving Newton's method for local coordinates */
     double tolerance_;
     ProjectionGuessType projectionGuess_;
-    
+    int planarNormalDirection_;
+    bool hasPlanarFaces_;
   };
 
 
@@ -294,6 +299,8 @@ namespace ATC {
 
     bool contains_point(const DENS_MAT &eltCoords,
                         const DENS_VEC &x) const;
+  
+    virtual bool check(const DENS_MAT &eltCoords);
 
   };
 
@@ -352,6 +359,6 @@ namespace ATC {
 
   };
 
-} // namespace ATC
+}; // namespace ATC
 
 #endif // FE_ELEMENT_H

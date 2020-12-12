@@ -84,12 +84,12 @@ namespace ATC {
         dDdF[0].add_scaled(M0[0], 2*embed_pp*l0(0));
         dDdF[1].add_scaled(M0[1], 2*embed_pp*l0(1));
         dDdF[2].add_scaled(M0[2], 2*embed_pp*l0(2));
-        dDdF[3].add_scaled(M0[1], embed_pp*l0(2));
-        dDdF[3].add_scaled(M0[2], embed_pp*l0(1));
+        dDdF[5].add_scaled(M0[1], embed_pp*l0(2));
+        dDdF[5].add_scaled(M0[2], embed_pp*l0(1));
         dDdF[4].add_scaled(M0[0], embed_pp*l0(2));
         dDdF[4].add_scaled(M0[2], embed_pp*l0(0));
-        dDdF[5].add_scaled(M0[0], embed_pp*l0(1));
-        dDdF[5].add_scaled(M0[1], embed_pp*l0(0));
+        dDdF[3].add_scaled(M0[0], embed_pp*l0(1));
+        dDdF[3].add_scaled(M0[1], embed_pp*l0(0));
       }
     }
 
@@ -319,21 +319,21 @@ namespace ATC {
     dD[0].add_scaled(rR, fp_r*rr(0,0) + gp_r);
     dD[1].add_scaled(rR, fp_r*rr(1,1) + gp_r);
     dD[2].add_scaled(rR, fp_r*rr(2,2) + gp_r);
-    dD[3].add_scaled(rR, fp_r*rr(1,2));
+    dD[5].add_scaled(rR, fp_r*rr(1,2));
     dD[4].add_scaled(rR, fp_r*rr(0,2));
-    dD[5].add_scaled(rR, fp_r*rr(0,1));
+    dD[3].add_scaled(rR, fp_r*rr(0,1));
 
     // compute second term in A.13
     for (INDEX L=0; L<p.R.size(); L++) {
       dD[0](0,L) += p.R[L] * 2.0*fr[0];
       dD[1](1,L) += p.R[L] * 2.0*fr[1];
       dD[2](2,L) += p.R[L] * 2.0*fr[2];
-      dD[3](1,L) += p.R[L] * fr[2];
-      dD[3](2,L) += p.R[L] * fr[1];
+      dD[5](1,L) += p.R[L] * fr[2];
+      dD[5](2,L) += p.R[L] * fr[1];
       dD[4](0,L) += p.R[L] * fr[2];
       dD[4](2,L) += p.R[L] * fr[0];
-      dD[5](0,L) += p.R[L] * fr[1];
-      dD[5](1,L) += p.R[L] * fr[0];
+      dD[3](0,L) += p.R[L] * fr[1];
+      dD[3](1,L) += p.R[L] * fr[0];
     }
   }
 
@@ -371,17 +371,17 @@ namespace ATC {
     dD[0].add_scaled(rR, a + c*rr(0,0));
     dD[1].add_scaled(rR, a + c*rr(1,1));
     dD[2].add_scaled(rR, a + c*rr(2,2));
-    dD[3].add_scaled(rR, c*rr(1,2));
+    dD[5].add_scaled(rR, c*rr(1,2));
     dD[4].add_scaled(rR, c*rr(0,2));
-    dD[5].add_scaled(rR, c*rr(0,1));
+    dD[3].add_scaled(rR, c*rr(0,1));
 
     //add terms that multiply L0
     dD[0].add_scaled(L0, di*2*p.F_pp*p.rho_r + b*rr(0,0));
     dD[1].add_scaled(L0, di*2*p.F_pp*p.rho_r + b*rr(1,1));
     dD[2].add_scaled(L0, di*2*p.F_pp*p.rho_r + b*rr(2,2));
-    dD[3].add_scaled(L0, b*rr(1,2));
+    dD[5].add_scaled(L0, b*rr(1,2));
     dD[4].add_scaled(L0, b*rr(0,2));
-    dD[5].add_scaled(L0, b*rr(0,1));
+    dD[3].add_scaled(L0, b*rr(0,1));
   
     //add remaining term 
     const double aw = a + w;
@@ -390,12 +390,12 @@ namespace ATC {
       dD[0](0,L) += 2*awr[0]*p.R[L];
       dD[1](1,L) += 2*awr[1]*p.R[L];
       dD[2](2,L) += 2*awr[2]*p.R[L];
-      dD[3](2,L) += awr[1]*p.R[L];
-      dD[3](1,L) += awr[2]*p.R[L];
+      dD[5](2,L) += awr[1]*p.R[L];
+      dD[5](1,L) += awr[2]*p.R[L];
       dD[4](2,L) += awr[0]*p.R[L];
       dD[4](0,L) += awr[2]*p.R[L];
-      dD[5](1,L) += awr[0]*p.R[L];
-      dD[5](0,L) += awr[1]*p.R[L];
+      dD[3](1,L) += awr[0]*p.R[L];
+      dD[3](0,L) += awr[1]*p.R[L];
     }
   }
 
@@ -414,9 +414,9 @@ namespace ATC {
     dd.add_scaled(DF[0], c(0,0));
     dd.add_scaled(DF[1], c(1,1));
     dd.add_scaled(DF[2], c(2,2));
-    dd.add_scaled(DF[3], c(1,2) + c(2,1));
+    dd.add_scaled(DF[5], c(1,2) + c(2,1));
     dd.add_scaled(DF[4], c(0,2) + c(2,0));
-    dd.add_scaled(DF[5], c(0,1) + c(1,0));
+    dd.add_scaled(DF[3], c(0,1) + c(1,0));
 
     const double detD = det(D);
     const double factor = 0.5*kb*T/detD;
@@ -439,7 +439,7 @@ namespace ATC {
     const double Ic   = voigt3::tr(C); 
     const double IIc  = 0.5*(Ic*Ic - voigt3::tr(C2));
     const double IIIc = voigt3::det(C);
-    const DENS_VEC  I = voigt3::eye(3);
+    const DENS_VEC  I = voigt3::eye();
 
     // Compute the derivatives of the invarants of C
     DENS_VEC dIc   ( I );
@@ -505,7 +505,7 @@ namespace ATC {
     dfct -= dIIIu;
     dfct *= -fct*fct;
     
-    U = voigt3::eye(3, Iu*IIIu);
+    U = voigt3::eye(Iu*IIIu);
     U.add_scaled(C, Iu*Iu-IIu);
     U -= C2;
   
@@ -562,9 +562,9 @@ namespace ATC {
         dDdF[0](i,j) = (Da(0,0)-Db(0,0))*(0.5/EPS);
         dDdF[1](i,j) = (Da(1,1)-Db(1,1))*(0.5/EPS);
         dDdF[2](i,j) = (Da(2,2)-Db(2,2))*(0.5/EPS);
-        dDdF[3](i,j) = (Da(1,2)-Db(1,2))*(0.5/EPS);
+        dDdF[5](i,j) = (Da(1,2)-Db(1,2))*(0.5/EPS);
         dDdF[4](i,j) = (Da(0,2)-Db(0,2))*(0.5/EPS);
-        dDdF[5](i,j) = (Da(0,1)-Db(0,1))*(0.5/EPS);
+        dDdF[3](i,j) = (Da(0,1)-Db(0,1))*(0.5/EPS);
       }
     }
     return dDdF;

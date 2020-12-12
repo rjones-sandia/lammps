@@ -1,12 +1,3 @@
-#if !defined(_WIN32)
-
-#if defined(__FreeBSD__) || defined(__DragonFly__) || defined(__OpenBSD__) || defined(__NetBSD__)
-#include <cstdlib>
-#else
-#include <alloca.h>
-#endif
-
-#endif
 #include "Function.h"
 #include "ATC_Error.h"
 #include "LammpsInterface.h"
@@ -22,7 +13,7 @@ namespace ATC {
   //====================================================================
   //  UXT_Function
   //===================================================================
-  UXT_Function::UXT_Function(int /* narg */, double* /* args */) { }
+  UXT_Function::UXT_Function(int narg, double* args) { }
   //====================================================================
   //  UXT_Function_Mgr
   //====================================================================
@@ -67,13 +58,9 @@ namespace ATC {
   {
     string type = args[0];
     int narg = nargs -1;
-#ifdef _WIN32
-    double *dargs = (double *) _alloca(sizeof(double) * narg);
-#else
-    double *dargs = (double *) alloca(sizeof(double) * narg);
-#endif
+    double dargs[narg];
     for (int i = 0; i < narg; ++i) dargs[i] = atof(args[i+1]);
-
+  
     return function(type, narg, dargs);
   }
 
@@ -205,11 +192,7 @@ XT_Function_Mgr * XT_Function_Mgr::myInstance_ = nullptr;
   {
     string type = args[0];
     int narg = nargs -1;
-#ifdef _WIN32
-    double *dargs = (double *) _alloca(sizeof(double) * narg);
-#else
-    double *dargs = (double *) alloca(sizeof(double) * narg);
-#endif
+    double dargs[narg];
     for (int i = 0; i < narg; ++i) dargs[i] = atof(args[i+1]);
   
     return function(type, narg, dargs);
@@ -318,7 +301,7 @@ XT_Function_Mgr * XT_Function_Mgr::myInstance_ = nullptr;
     }
     ATC::LammpsInterface::instance()->print_msg_once(ss.str());
   }
-  double PiecewiseLinearFunction::f(double * x, double /* t */)
+  double PiecewiseLinearFunction::f(double * x, double t)
   {
 
     double s = mask[0]*(x[0]-x0[0])+mask[1]*(x[1]-x0[1])+mask[2]*(x[2]-x0[2]);
@@ -361,7 +344,7 @@ XT_Function_Mgr * XT_Function_Mgr::myInstance_ = nullptr;
     return slope[0]*(x[0]-x0[0])+slope[1]*(x[1]-x0[1])+slope[2]*(x[2]-x0[2]) + C0;
   }
 
-  double LinearTemporalRamp::dfdt(double* x, double /* t */) {
+  double LinearTemporalRamp::dfdt(double* x, double t) {
     return mask_slope[0]*(x[0]-x0[0])+mask_slope[1]*(x[1]-x0[1])+mask_slope[2]*(x[2]-x0[2]) + C0_slope;
   }
 
@@ -410,6 +393,9 @@ XT_Function_Mgr * XT_Function_Mgr::myInstance_ = nullptr;
     C   = args[7];
     C0  = args[8];
     tag_ = "gaussian";
+    stringstream ss;
+    ss << "created function : " << C << " exp( (" << mask[0] << "(x-"<< x0[0] << ")^2+"<< mask[1] << "(y-"<<x0[1]<<")^2+"<<mask[2]<<"(z-"<<x0[2] << ")^2/ " << tau << "^2 ) + " << C0;
+    ATC::LammpsInterface::instance()->print_msg_once(ss.str());
   }
   //--------------------------------------------------------------------
   //--------------------------------------------------------------------

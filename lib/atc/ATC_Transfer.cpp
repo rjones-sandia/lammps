@@ -10,7 +10,6 @@
 #include "KernelFunction.h"
 #include "PerPairQuantity.h"
 #include "FieldManager.h"
-#define ESHELBY_VIRIAL
 #include "LinearSolver.h"
 
 
@@ -80,7 +79,10 @@ namespace ATC {
       hasBonds_(false),
       resetKernelFunction_(false),
       dxaExactMode_(true),
-      cauchyBornStress_(nullptr)
+      cauchyBornStress_(nullptr),
+      needsBondMatrix_(false),
+      useVirial_(false),
+      virialName_("virial")
   {
     nTypes_ = lammpsInterface_->ntypes();
 
@@ -88,17 +90,8 @@ namespace ATC {
     keScale_= lammpsInterface_->mvv2e();
     // if surrogate model of md (no physics model created)
     if (matParamFile != "none") {
-      fstream  fileId(matParamFile.c_str(), std::ios::in);
-      if (!fileId.is_open()) throw ATC_Error("cannot open material file");
-      CbData cb;
-      LammpsInterface *lmp = LammpsInterface::instance();
-      lmp->lattice(cb.cell_vectors, cb.basis_vectors);
-      cb.inv_atom_volume = 1.0 / lmp->volume_per_atom();
-      cb.e2mvv           = 1.0 / lmp->mvv2e();
-      cb.atom_mass       = lmp->atom_mass(1); 
-      cb.boltzmann       = lmp->boltz();
-      cb.hbar            = lmp->hbar();
-      cauchyBornStress_ = new StressCauchyBorn(fileId, cb);
+      StressManager mgr;
+      cauchyBornStress_ = mgr.create(matParamFile);
     }
 
     // Defaults
@@ -132,6 +125,12 @@ namespace ATC {
   // called before the beginning of a "run"
   void ATC_Transfer::initialize() 
   {
+    needsBondMatrix_ =  (! bondOnTheFly_ ) &&
+                        (! useVirial_)     &&
+             ((fieldFlags_(STRESS) 
+           || fieldFlags_(ESHELBY_STRESS)
+           || fieldFlags_(HEAT_FLUX)));
+
     if (kernelOnTheFly_ && !readRefPE_ && !setRefPEvalue_) {
       if (setRefPE_) {
         stringstream ss;
@@ -148,7 +147,7 @@ namespace ATC {
     }
 
     if (!initialized_ || ATC::LammpsInterface::instance()->atoms_sorted() || resetKernelFunction_) {
-      // initialize kernel function matrix N_Ia
+      // initialize kernel funciton matrix N_Ia
       if (! kernelOnTheFly_) {
         try{
           if (!moleculeIds_.empty()) compute_kernel_matrix_molecule(); //KKM add
@@ -164,10 +163,8 @@ namespace ATC {
     ghostManager_.initialize();
 
     // initialize bond matrix B_Iab
-    if ((! bondOnTheFly_) 
-       && ( ( fieldFlags_(STRESS) 
-           || fieldFlags_(ESHELBY_STRESS) 
-           || fieldFlags_(HEAT_FLUX) ) ) ) {
+    if (needsBondMatrix_) {
+      ATC::LammpsInterface::instance()->print_msg("bond matrix will be computed and stored");
       try {
         compute_bond_matrix(); 
       } 
@@ -175,6 +172,7 @@ namespace ATC {
         ATC::LammpsInterface::instance()->print_msg("stress/heat_flux will be computed on-the-fly");
         
         bondOnTheFly_ = true;
+        needsBondMatrix_ = false;
       }
     }
 
@@ -209,11 +207,6 @@ namespace ATC {
           string tag = iter->first;
           filteredData_[tag] = hardyData_[tag];
           timeFilters_(index)->initialize(filteredData_[tag].quantity());
-#ifdef ESHELBY_VIRIAL
-          if (tag == "virial" && fieldFlags_(ESHELBY_STRESS)) {
-            filteredData_["eshelby_virial"] = hardyData_["eshelby_virial"];
-          }
-#endif
           index++;
         }
         output();
@@ -267,16 +260,10 @@ namespace ATC {
         string tag = iter->first;
         COMPUTE_POINTER cmpt = lammpsInterface_->compute_pointer(tag);
         int ncols = lammpsInterface_->compute_ncols_peratom(cmpt);
+        string msg = "compute "+tag+":"+to_string(ncols);
+        lammpsInterface_->print_msg_once(msg);
         hardyData_        [tag].reset(nNodes_,ncols);
         filteredData_[tag].reset(nNodes_,ncols);
-#ifdef ESHELBY_VIRIAL
-        if (tag == "virial" && fieldFlags_(ESHELBY_STRESS)) {
-          string esh = "eshelby_virial";
-          int size = FieldSizes[ESHELBY_STRESS];
-          hardyData_   [esh].reset(nNodes_,size);
-          filteredData_[esh].reset(nNodes_,size);
-        }
-#endif
       }
     }
   }
@@ -352,9 +339,13 @@ namespace ATC {
     }
     // gradient matrix
     if (gradFlags_.has_member(true)) {
-      NativeShapeFunctionGradient * gradientMatrix = new NativeShapeFunctionGradient(this);
-      interscaleManager_.add_vector_sparse_matrix(gradientMatrix,"GradientMatrix");
-      gradientMatrix_ = gradientMatrix;
+      if (!initialized_) {
+        gradientMatrix_.reserve(nsd_);
+        for (int i = 0; i < nsd_; i++) {
+          gradientMatrix_[i] = new SPAR_MAT(nNodes_,nNodes_); 
+        }
+        feEngine_->compute_gradient_matrix(gradientMatrix_);
+      }
     }
   }
   //-------------------------------------------------------------------
@@ -413,11 +404,7 @@ namespace ATC {
 
     // for hardy-based fluxes
     
-    bool needsBondMatrix =  (! bondOnTheFly_ ) &&
-             (fieldFlags_(STRESS)
-           || fieldFlags_(ESHELBY_STRESS)
-           || fieldFlags_(HEAT_FLUX));
-    if (needsBondMatrix) {
+    if (needsBondMatrix_) {
       if (hasPairs_ && hasBonds_) {
         pairMap_ = new PairMapBoth(lammpsInterface_,groupbit_);
       }
@@ -437,6 +424,7 @@ namespace ATC {
         bondMatrix_ = new BondMatrixPartitionOfUnity(lammpsInterface_,*pairMap_,xPointer_,fe_mesh,accumulantInverseVolumes_); 
       }
       else {
+        if (! kernelFunction_ ) throw ATC_Error("no kernel function defined");
         bondMatrix_ = new BondMatrixKernel(lammpsInterface_,*pairMap_,xPointer_,fe_mesh,kernelFunction_);
       }
     }
@@ -642,6 +630,40 @@ namespace ATC {
         check_field_dependencies();
         if (fieldFlags_(DISPLACEMENT)) { trackDisplacement_ = true; }
       }
+      /*! \page man_hardy_field fix_modify AtC field 
+        \section syntax
+        fix_modify AtC field < stress | potential_energy > from < compute_name > \n
+        \section examples
+        <TT> compute virial all stress/atom </TT> \n
+        <TT> fix_modify AtC computes add virial volume </TT> \n
+        <TT> fix_modify AtC field stress from virial </TT>
+        \section description
+        Enables replacing per-atom source for stress or energy field with an
+        existing compute.
+        \section restrictions
+        Only for stress or potential_energy at present
+        \section related
+        See \ref man_hardy_fields 
+        \section default
+        None
+      */
+      if (strcmp(arg[argIdx],"field")==0) {
+        argIdx++;
+        if (strcmp(arg[argIdx],"stress")==0) { 
+          FieldName field_name = string_to_field(arg[argIdx]);
+          outputFlags_(field_name) = true; 
+          argIdx++; // "from"
+          argIdx++;
+          useVirial_ = true;
+          needsBondMatrix_ = false;
+          virialName_ = arg[argIdx];
+          computes_[virialName_] = VOLUME_NORMALIZATION;
+          nComputes_++;
+          match = true;
+        } 
+        check_field_dependencies();
+        if (fieldFlags_(DISPLACEMENT)) { trackDisplacement_ = true; }
+      }
 
       /*! \page man_hardy_gradients fix_modify AtC gradients
         \section syntax
@@ -654,7 +676,7 @@ namespace ATC {
         <TT> fix_modify AtC gradients add temperature velocity stress </TT> \n
         <TT> fix_modify AtC gradients delete velocity </TT> \n
         \section description
-        Requests calculation and output of gradients of the fields from the
+        Requests calculation and ouput of gradients of the fields from the 
         transfer class. These gradients will be with regard to spatial or material
         coordinate for eulerian or lagrangian analysis, respectively, as specified by 
         atom_element_map (see \ref man_atom_element_map )
@@ -698,7 +720,7 @@ namespace ATC {
         <TT> fix_modify AtC rates add temperature velocity stress </TT> \n
         <TT> fix_modify AtC rates delete stress </TT> \n
         \section description
-        Requests calculation and output of rates (time derivatives) of the fields from the
+        Requests calculation and ouput of rates (time derivatives) of the fields from the 
         transfer class. For eulerian analysis (see \ref man_atom_element_map ), these rates
         are the partial time derivatives of the nodal fields, not the full (material) time
         derivatives. \n
@@ -865,7 +887,7 @@ namespace ATC {
   }
 
   //-------------------------------------------------------------------
-  // called at the beginning of second half timestep
+  // called at the begining of second half timestep
   // REFACTOR move this to post_neighbor
   void ATC_Transfer::pre_final_integrate()
   {
@@ -887,28 +909,29 @@ namespace ATC {
   void ATC_Transfer::post_final_integrate()
   {
     // compute spatially smoothed quantities
+    lammpsInterface_->stream_msg_once("post-processing");
     double dt = lammpsInterface_->dt();
     if ( sample_now() ) {
       
-      bool needsBond =  (! bondOnTheFly_ ) &&
-             (fieldFlags_(STRESS)
-           || fieldFlags_(ESHELBY_STRESS)
-           || fieldFlags_(HEAT_FLUX));
-
-      if ( needsBond ) {
+      if ( needsBondMatrix_ ) {
         if (pairMap_->need_reset()) {
-//        ATC::LammpsInterface::instance()->print_msg("Recomputing bond matrix due to atomReset_ value");
+          ATC::LammpsInterface::instance()->print_msg("Recomputing bond matrix due to atomReset_ value");
           compute_bond_matrix(); 
         }
       }
+      lammpsInterface_->stream_msg_once("done pre-compute");
       time_filter_pre (dt);
       compute_fields();
       time_filter_post(dt);
       lammpsInterface_->computes_addstep(lammpsInterface_->ntimestep()+sampleFrequency_);
+      lammpsInterface_->stream_msg_once("done compute");
     }
 
     // output
-    if ( output_now() && !outputStepZero_ ) output();
+    if ( output_now() && !outputStepZero_ ) {
+      output();
+      lammpsInterface_->stream_msg_once("done with output");
+    }
     outputStepZero_ = false;
 
     //ATC_Method::post_final_integrate();
@@ -928,7 +951,50 @@ namespace ATC {
     // need to confer with JAT. (JAZ, 4/5/12)
     interscaleManager_.lammps_force_reset();
 
-    // (1) direct quantities
+    // (1) computes
+    lammpsInterface_->computes_clearstep();
+    map <string,int>::const_iterator iter;
+    for (iter = computes_.begin(); iter != computes_.end(); iter++) {
+      string tag = iter->first;
+      COMPUTE_POINTER cmpt = lammpsInterface_->compute_pointer(tag);
+      int projection = iter->second;
+      int ncols = lammpsInterface_->compute_ncols_peratom(cmpt);;
+      DENS_MAT atomicData(nLocal_,ncols);
+      if (ncols == 1) {
+        double * atomData = lammpsInterface_->compute_vector_peratom(cmpt);
+        for (int i = 0; i < nLocal_; i++) {
+          int atomIdx = internalToAtom_(i);
+          atomicData(i,0) = atomData[atomIdx];
+        }
+      }
+      else {
+        double ** atomData = lammpsInterface_->compute_array_peratom(cmpt);
+        for (int i = 0; i < nLocal_; i++) {
+          int atomIdx = internalToAtom_(i);
+          for (int k = 0; k < ncols; k++) {
+            atomicData(i,k) = atomData[atomIdx][k];
+          }
+        }
+      }
+      // REFACTOR -- make dep manage
+      if      (projection == NO_NORMALIZATION) {
+        project(atomicData,hardyData_[tag].set_quantity());
+      }
+      else if (projection == VOLUME_NORMALIZATION) {
+        project_volume_normalized(atomicData,hardyData_[tag].set_quantity());
+      }
+      else if (projection == NUMBER_NORMALIZATION) {
+        project_count_normalized(atomicData,hardyData_[tag].set_quantity());
+      }
+      else if (projection == MASS_NORMALIZATION) {
+        throw ATC_Error("unimplemented (mass) normalization");
+      }
+      else {
+        throw ATC_Error("unimplemented normalization");
+      }
+    }
+
+    // (2) direct quantities
     for(int i=0; i < numFields_; ++i) {
       FieldName index = indices_[i];
       if (fieldFlags_(index)) {
@@ -937,11 +1003,7 @@ namespace ATC {
       }
     }
 
-    if (fieldFlags_(STRESS)) 
-      compute_stress(hardyData_["stress"].set_quantity());
-    if (fieldFlags_(HEAT_FLUX)) 
-      compute_heatflux(hardyData_["heat_flux"].set_quantity());
-// molecule data
+    // molecule data
     if (fieldFlags_(DIPOLE_MOMENT))
       compute_dipole_moment(hardyData_["dipole_moment"].set_quantity()); 
     if (fieldFlags_(QUADRUPOLE_MOMENT))
@@ -949,7 +1011,7 @@ namespace ATC {
     if (fieldFlags_(DISLOCATION_DENSITY)) 
       compute_dislocation_density(hardyData_["dislocation_density"].set_quantity());
 
-    // (2) derived quantities
+    // (3) derived quantities
     // compute: gradients
     if (gradFlags_.has_member(true)) {
       for(int index=0; index < NUM_TOTAL_FIELDS; ++index) {
@@ -963,6 +1025,11 @@ namespace ATC {
         }
       }
     }
+    // stress may depend on Grad u if virial is being used in Lagrangian context
+    if (fieldFlags_(STRESS)) 
+      compute_stress(hardyData_["stress"].set_quantity());
+    if (fieldFlags_(HEAT_FLUX)) 
+      compute_heatflux(hardyData_["heat_flux"].set_quantity());
     // compute: eshelby stress 
     if (fieldFlags_(ESHELBY_STRESS)) {
       {
@@ -984,6 +1051,13 @@ namespace ATC {
       compute_eshelby_stress(hardyData_["cauchy_born_eshelby_stress"].set_quantity(),
                              E,hardyData_["stress"].quantity(),
                              hardyData_["displacement_gradient"].quantity());
+    }
+    // compute: M kernel
+    if (fieldFlags_(M_KERNEL)) {
+      compute_m_kernel(hardyData_["m_kernel"].set_quantity(),
+                             hardyData_["eshelby_stress"].quantity(),
+                             hardyData_["stress"].quantity(),
+                             hardyData_["displacement"].quantity());
     }
     // compute: cauchy born stress 
     if (fieldFlags_(CAUCHY_BORN_STRESS)) {
@@ -1020,81 +1094,29 @@ namespace ATC {
                                   hardyData_["stretch"].set_quantity(),
                                   hardyData_["displacement_gradient"].quantity());
     }
+    // compute: matrix of principal stretches
+    if (fieldFlags_(PRINCIPAL_STRETCHES)){
+      compute_eigenvectors(hardyData_["principal_stretches"].set_quantity(),
+                           hardyData_["stretch"].quantity());
+    }
+    // compute: matrix of principal stretches
+    if (fieldFlags_(PRINCIPAL_STRESSES)){
+      compute_eigenvectors(hardyData_["principal_stresses"].set_quantity(),
+                           hardyData_["stress"].quantity());
+    }
     // compute: rotation and/or stretch from deformation gradient 
     if (fieldFlags_(CAUCHY_BORN_ELASTIC_DEFORMATION_GRADIENT)) {
-      compute_elastic_deformation_gradient2(hardyData_["elastic_deformation_gradient"].set_quantity(),
+      compute_elastic_deformation_gradient(hardyData_["elastic_deformation_gradient"].set_quantity(),
                                            hardyData_["stress"].quantity(),
                                            hardyData_["displacement_gradient"].quantity());
     }
 
-    // (3) computes
-    lammpsInterface_->computes_clearstep();
-    map <string,int>::const_iterator iter;
-    for (iter = computes_.begin(); iter != computes_.end(); iter++) {
-      string tag = iter->first;
-      COMPUTE_POINTER cmpt = lammpsInterface_->compute_pointer(tag);
-      int projection = iter->second;
-      int ncols = lammpsInterface_->compute_ncols_peratom(cmpt);;
-      DENS_MAT atomicData(nLocal_,ncols);
-      if (ncols == 1) {
-        double * atomData = lammpsInterface_->compute_vector_peratom(cmpt);
-        for (int i = 0; i < nLocal_; i++) {
-          int atomIdx = internalToAtom_(i);
-          atomicData(i,0) = atomData[atomIdx];
-        }
-      }
-      else {
-        double ** atomData = lammpsInterface_->compute_array_peratom(cmpt);
-        for (int i = 0; i < nLocal_; i++) {
-          int atomIdx = internalToAtom_(i);
-          for (int k = 0; k < ncols; k++) {
-            atomicData(i,k) = atomData[atomIdx][k];
-          }
-        }
-      }
-      // REFACTOR -- make dep manage
-      if      (projection == NO_NORMALIZATION) {
-        project(atomicData,hardyData_[tag].set_quantity());
-      }
-      else if (projection == VOLUME_NORMALIZATION) {
-        project_volume_normalized(atomicData,hardyData_[tag].set_quantity());
-      }
-      else if (projection == NUMBER_NORMALIZATION) {
-        project_count_normalized(atomicData,hardyData_[tag].set_quantity());
-      }
-      else if (projection == MASS_NORMALIZATION) {
-        throw ATC_Error("unimplemented normalization");
-      }
-      else {
-        throw ATC_Error("unimplemented normalization");
-      }
-#ifdef ESHELBY_VIRIAL
-      if (tag == "virial" && fieldFlags_(ESHELBY_STRESS)) {
-        if (atomToElementMapType_ == LAGRANGIAN) {
-          DENS_MAT tmp = hardyData_[tag].quantity();
-          DENS_MAT & myData(hardyData_[tag].set_quantity());
-          myData.reset(nNodes_,FieldSizes[STRESS]);
-          DENS_MAT F(3,3),FT(3,3),FTINV(3,3),CAUCHY(3,3),PK1(3,3);
-          const DENS_MAT& H(hardyData_["displacement_gradient"].quantity());
-          for (int k = 0; k < nNodes_; k++ ) {
-            vector_to_symm_matrix(k,tmp,CAUCHY);
-            vector_to_matrix(k,H,F);
-            F(0,0) += 1.0; F(1,1) += 1.0; F(2,2) += 1.0;
-            FT = F.transpose();
-            FTINV = inv(FT);
-            
-            //       volumes are already reference volumes.
-            PK1 = CAUCHY*FTINV; 
-            matrix_to_vector(k,PK1,myData);
-          }
-        }
-        compute_eshelby_stress(hardyData_["eshelby_virial"].set_quantity(),
-           hardyData_["internal_energy"].quantity(),hardyData_[tag].quantity(),
-           hardyData_["displacement_gradient"].quantity());
-      }
-#endif
+    // (4) derived from computes
+    if (fieldFlags_(VIRIAL_STRAIN)) {
+      compute_virial_strain(hardyData_["virial_strain"].set_quantity(),
+                            hardyData_[virialName_].quantity());
+                            //hardyData_["stress"].quantity());
     }
-    
   }// end of compute_fields routine
 
   //-------------------------------------------------------------------
@@ -1164,11 +1186,6 @@ namespace ATC {
       string tag = iter->first;
       timeFilters_(index)->apply_post_step2(filteredData_[tag].set_quantity(),
                                             hardyData_[tag].quantity(), delta_t);
-#ifdef ESHELBY_VIRIAL
-      if (tag == "virial" && fieldFlags_(ESHELBY_STRESS)) {
-        filteredData_["eshelby_virial"] = hardyData_["eshelby_virial"];
-      }
-#endif
       index++;
     }
   }
@@ -1176,13 +1193,39 @@ namespace ATC {
   //-------------------------------------------------------------------
   void ATC_Transfer::output()
   {
+    if (outputNow_) {
+      compute_fields();
+      // bypass filter and copy all data to filteredData_
+      string name;
+      for(int index=0; index < NUM_TOTAL_FIELDS; ++index) {
+        if (fieldFlags_(index)) {
+          name = field_to_string((FieldName) index);
+          filteredData_[name].set_quantity() = hardyData_[name].quantity();
+        }
+        if (rateFlags_(index)) {
+          string name= field_to_string((FieldName) index);
+          string rate_name = name + "_rate";
+          filteredData_[rate_name].set_quantity() = hardyData_[rate_name].quantity();
+        }
+        if (gradFlags_(index)) {
+          string name= field_to_string((FieldName) index);
+          string grad_name = name + "_gradient";
+          filteredData_[grad_name].set_quantity() = hardyData_[grad_name].quantity();
+        }
+      }
+      map <string,int>::const_iterator iter;
+      for (iter = computes_.begin(); iter != computes_.end(); iter++) {
+        string tag = iter->first;
+        filteredData_[tag].set_quantity() = hardyData_[tag].quantity();
+      }
+    }
     feEngine_->departition_mesh();
     
     for(int index=0; index < NUM_TOTAL_FIELDS; ++index) {
       if (outputFlags_(index)) {
         FieldName fName = (FieldName) index;
         string name= field_to_string(fName);
-        fields_[fName] = filteredData_[name];
+        fields_[fName] = filteredData_[name]; // fields_ is Method container
       }
     }
     
@@ -1215,11 +1258,6 @@ namespace ATC {
       for (iter = computes_.begin(); iter != computes_.end(); iter++) {
         string tag = iter->first;
         output_data[tag]       = & ( filteredData_[tag].set_quantity());
-#ifdef ESHELBY_VIRIAL
-        if (tag == "virial" && fieldFlags_(ESHELBY_STRESS)) {
-          output_data["eshelby_virial"] = & ( filteredData_["eshelby_virial"].set_quantity() );
-        }
-#endif
       }
 
       DENS_MAT nodalInverseVolumes = CLON_VEC(accumulantInverseVolumes_->quantity());
@@ -1335,10 +1373,12 @@ namespace ATC {
     outNodeData.reset(nrows,ncols*nsd_);
     int index = 0;
     for (int n = 0; n < ncols; n++) { //output v1,1 v1,2 v1,3 ...
-      for (int m = 0; m < nsd_; m++) {
         CLON_VEC inData(inNodeData,CLONE_COL,n);
+      for (int m = 0; m < nsd_; m++) {
         CLON_VEC outData(outNodeData,CLONE_COL,index);
-        outData = (*((gradientMatrix_->quantity())[m]))*inData;
+//      SPAR_MAT & M = (*((gradientMatrix_->quantity())[m]));
+        SPAR_MAT & M = *(gradientMatrix_[m]);
+        outData = M*inData;
         ++index;
       }
     }
@@ -1379,6 +1419,9 @@ namespace ATC {
     if (fieldFlags_(TRANSFORMED_STRESS))  {
       fieldFlags_(STRESS) = true;
       fieldFlags_(DISPLACEMENT) = true;
+    }
+    if (fieldFlags_(M_KERNEL))  {
+     fieldFlags_(ESHELBY_STRESS) = true;
     }
     if (fieldFlags_(ESHELBY_STRESS))  {
       fieldFlags_(STRESS) = true;
@@ -1438,6 +1481,10 @@ namespace ATC {
       fieldFlags_(NUMBER_DENSITY) = true;
     }
 
+    if (fieldFlags_(PRINCIPAL_STRETCHES) ) {
+      //fieldFlags_(PRINCIPAL_STRETCH_VECTORS) = true;
+      fieldFlags_(STRETCH) = true;
+    }
     if (fieldFlags_(ROTATION) || 
         fieldFlags_(STRETCH)) {
       fieldFlags_(DISPLACEMENT) = true;
@@ -1453,11 +1500,33 @@ namespace ATC {
         gradFlags_(DISPLACEMENT) = true;
     }
 
+    if (fieldFlags_(PRINCIPAL_STRESSES) ) {
+      //fieldFlags_(PRINCIPAL_STRESS_VECTORS) = true;
+      fieldFlags_(STRESS) = true;
+    }
+
     // check whether single_enable==0 for stress/heat flux calculation
     if (fieldFlags_(STRESS) || fieldFlags_(HEAT_FLUX)) {
-      if (lammpsInterface_->single_enable()==0) {
-        throw ATC_Error("Calculation of  stress field not possible with selected pair type.");
+      if (! useVirial_ && lammpsInterface_->single_enable()==0) {
+        string msg = "direct estimate of stress field not possible with selected pair type";
+        map <string,int>::const_iterator iter;
+        for (iter = computes_.begin(); iter != computes_.end(); iter++) {
+          string tag = iter->first;
+          if (tag == "virial") {
+            msg += " substituting virial compute";
+            lammpsInterface_->print_msg_once(msg+" substituting ATC virial compute");
+            virialName_ = "virial";
+            useVirial_ = true;
+          }
+        }
+        if (useVirial_) lammpsInterface_->print_msg_once(msg);
+        else {
+          msg += ", an ATC registered virial compute can be used as a substitute";
+          throw ATC_Error(msg);
+        }
       }
+      if (useVirial_ && (atomToElementMapType_ != EULERIAN) ) 
+        gradFlags_(DISPLACEMENT) = true;
     }
     
   } 
@@ -1485,10 +1554,48 @@ namespace ATC {
   }
   //-------------------------------------------------------------------
   void ATC_Transfer::compute_stress(DENS_MAT & stress)
-  {
+  {       
     // table of bond functions already calculated in initialize function
     // get conversion factor for nktV to p units
     double nktv2p = lammpsInterface_->nktv2p();
+
+// virial is force (x) position
+// volume normalization is from the kernel
+//   eulerian:spatial volume
+//   lagrangian:referential volume
+    if (useVirial_) {
+
+      const DENS_MAT & v = hardyData_[virialName_].quantity();
+      int nnodes = v.nRows();
+      if (atomToElementMapType_ == EULERIAN) { // copy
+        int ncols = v.nCols();
+        stress.reset(nnodes,ncols);
+        for (int i = 0; i < nnodes; ++i) {
+          for (int j = 0; j < ncols; ++j) {
+            stress(i,j) = v(i,j); 
+          }
+        }
+      }
+      else { // transform virial/V0 ~ cauchy to 1PK = 1/V0 virial F^-T
+        stress.reset(nnodes,9);
+        const DENS_MAT & H = hardyData_["displacement_gradient"].quantity();
+        DENS_MAT F(3,3), FT(3,3),invFT(3,3);
+        DENS_MAT V(3,3), P(3,3);
+        for (int i = 0; i < nNodes_; i++) {
+          global_to_matrix(i,H,F);
+          matrix3::add_identity(F);
+          FT = F.transpose(); 
+          invFT = inv(FT); 
+//        double J = det(F);
+//        invFT *= J;
+          //invFT = adjugate(FT); // adjugateF = detF F^-1
+          global_to_matrix(i,v,V);
+          P = V*invFT;
+          matrix_to_global(P,i,stress);
+        }
+      }
+      return;
+    }
 
     // calculate kinetic energy tensor part of stress for Eulerian analysis
     if (atomToElementMapType_ == EULERIAN && nLocal_>0) {
@@ -1542,6 +1649,7 @@ namespace ATC {
       double ma =  mass ? mass[type[atomIdx]]: rmass[atomIdx];
       ma *= mvv2e; // convert mass to appropriate units
       double* v = vatom[atomIdx];
+      // lammps order not voigt
       atomicTensor_(i,0) -= ma*v[0]*v[0];
       atomicTensor_(i,1) -= ma*v[1]*v[1];
       atomicTensor_(i,2) -= ma*v[2]*v[2];
@@ -1607,7 +1715,7 @@ namespace ATC {
     double * rmass = lammpsInterface_->atom_rmass();
     double ** vatom    = lammpsInterface_->vatom();
     double mvv2e = lammpsInterface_->mvv2e();
-    double * atomPE = lammpsInterface_->compute_pe_peratom();
+    double * atomPE = lammpsInterface_->compute_pe_peratom(); 
     double atomKE, atomEnergy;
     atomicVector_.reset(nLocal_,3);
     for (int i = 0; i < nLocal_; i++) {
@@ -1658,7 +1766,7 @@ namespace ATC {
   }
   //--------------------------------------------------------------------
   void ATC_Transfer::compute_vacancy_concentration(DENS_MAT & Cv,
-                                                   const DENS_MAT & H, const DENS_MAT & /* rhoN */)
+    const DENS_MAT & H, const DENS_MAT & rhoN)
   {
     int * type = lammpsInterface_->atom_type();
     DENS_MAT new_rho(nNodes_,1);
@@ -1683,15 +1791,15 @@ namespace ATC {
       if (atomToElementMapType_ == EULERIAN) {
         // for Eulerian analysis: F = (1-H)^{-1}
         DENS_MAT G(3,3);
-        vector_to_matrix(i,H,G);
+        global_to_matrix(i,H,G);
         G *= -1.;
-        G(0,0) += 1.0; G(1,1) += 1.0; G(2,2) += 1.0;
+        matrix3::add_identity(G);
         F = inv(G);
       }
       else if (atomToElementMapType_ == LAGRANGIAN) {
         // for Lagrangian analysis: F = (1+H)
-        vector_to_matrix(i,H,F);
-        F(0,0) += 1.0; F(1,1) += 1.0; F(2,2) += 1.0;
+        global_to_matrix(i,H,F);
+        matrix3::add_identity(F);
       }
       double J = det(F);
       double volume_per_atom = lammpsInterface_->volume_per_atom();
@@ -1718,18 +1826,16 @@ namespace ATC {
       // copy to local
       if (atomToElementMapType_ == LAGRANGIAN) {
         // Stress notation convention:: 0:11 1:12 2:13  3:21 4:22 5:23  6:31 7:32 8:33
-        vector_to_matrix(i,S,P);
+        global_to_matrix(i,S,P);
 
 
-        vector_to_matrix(i,H,F);
-#ifndef H_BASED
-        F(0,0) += 1.0; F(1,1) += 1.0; F(2,2) += 1.0;
-#endif
+        global_to_matrix(i,H,F);
+        matrix3::add_identity(F);
         FT = F.transpose(); 
       }
       else if (atomToElementMapType_ == EULERIAN) {
-        vector_to_symm_matrix(i,S,P);
-        vector_to_matrix(i,H,F);
+        global_to_matrix(i,S,P);
+        global_to_matrix(i,H,F);
         FT = F.transpose();
       }
       FTP = (1.0/nktv2p)*FT*P;
@@ -1746,8 +1852,33 @@ namespace ATC {
         ESH = FT*ESH; 
       }
       // copy to global
-      matrix_to_vector(i,ESH,M);
+      matrix_to_global(ESH,i,M);
     }
+  }
+  //--------------------------------------------------------------------
+  void ATC_Transfer::compute_m_kernel(DENS_MAT & m,
+    const DENS_MAT & S, const DENS_MAT & P, const DENS_MAT & u)
+  {
+    if (atomToElementMapType_ == EULERIAN) 
+      throw ATC_Error("m-kernel: Eulerian map unsupported");
+    // eshelby stress:S, stress:P, displacement: u
+    // m =  S^T X - 1/2 P^T u
+    m.reset(nNodes_,FieldSizes[M_KERNEL]);
+    DENS_MAT Si(3,3),ST(3,3),Pi(3,3),PT(3,3);
+    DENS_MAT ui(3,1),mi(3,1),Xi(3,1);
+    for (int i = 0; i < nNodes_; i++) {
+      global_to_matrix(i,S,Si);
+      ST = Si.transpose();
+      Xi = feEngine_->fe_mesh()->global_coordinates(i);
+      mi = ST*Xi;
+      global_to_matrix(i,P,Pi);
+      PT = Pi.transpose();
+      global_to_matrix(i,u,ui);
+      mi += -0.5*PT*ui;
+      matrix_to_global(mi,i,m);
+    }
+    // const DENS_MAT & x  = feEngine_->nodal_coordinates();
+    // DENS_MAT * X = mesh()->coordinates(void) 
   }
   //---------------------------------------------------------------------------
   // Computes the Cauchy Born stress tensor, T given displacement gradient, H
@@ -1780,37 +1911,29 @@ namespace ATC {
     symm_dens_mat_vec_to_vector(tField,S);
     S *= fact;
     
-    // tField/S holds the 2nd P-K stress tensor. Transform to
-    // Cauchy for EULERIAN analysis, transform to 1st P-K
-    // for LAGRANGIAN analysis.
+    // tField/S holds the 2nd P-K stress tensor. 
     DENS_MAT PK2(3,3),G(3,3),F(3,3),FT(3,3),STRESS(3,3);
     for (int i = 0; i < nNodes_; i++) {
-
-      vector_to_symm_matrix(i,S,PK2);
-
-      if (atomToElementMapType_ == EULERIAN) {
-
+      global_to_matrix(i,S,PK2);
+      if (atomToElementMapType_ == EULERIAN) { // Cauchy stress
         // for Eulerian analysis: F = (1-H)^{-1}
-        vector_to_matrix(i,H,G);
+        global_to_matrix(i,H,G);
         G *= -1.;
-
-        G(0,0) += 1.0; G(1,1) += 1.0; G(2,2) += 1.0;
+        matrix3::add_identity(G);
         F = inv(G);
         FT  = transpose(F);
         double J = det(F);
         STRESS = F*PK2*FT;
         STRESS *= 1/J; 
-        symm_matrix_to_vector(i,STRESS,T);
+        matrix_to_global(STRESS,i,T);
       }
-      else{
+      else{  // 1st P-K
         // for Lagrangian analysis: F = 1 + H
-        vector_to_matrix(i,H,F);
-
-        F(0,0) += 1.0; F(1,1) += 1.0; F(2,2) += 1.0;
+        global_to_matrix(i,H,F);
+        matrix3::add_identity(F);
         STRESS = F*PK2;
-        matrix_to_vector(i,STRESS,T);
+        matrix_to_global(STRESS,i,T);
       }
- 
     }
   }
   //---------------------------------------------------------------------------
@@ -1842,10 +1965,9 @@ namespace ATC {
       DENS_MAT G(3,3),F(3,3);
       for (int i = 0; i < nNodes_; i++) {
         // for Eulerian analysis: F = (1-H)^{-1}
-        vector_to_matrix(i,H,G);
+        global_to_matrix(i,H,G);
         G *= -1.;
-
-        G(0,0) += 1.0; G(1,1) += 1.0; G(2,2) += 1.0;
+        matrix3::add_identity(G);
         F = inv(G);
         double J = det(F);
         E(i,0) *= 1/J;
@@ -1881,16 +2003,14 @@ namespace ATC {
       DENS_MAT G(3,3),F(3,3);
       for (int i = 0; i < nNodes_; i++) {
         // for Eulerian analysis: F = (1-H)^{-1}
-        vector_to_matrix(i,H,G);
+        global_to_matrix(i,H,G);
         G *= -1.;
-
-        G(0,0) += 1.0; G(1,1) += 1.0; G(2,2) += 1.0;
+        matrix3::add_identity(G);
         F = inv(G);
         double J = det(F);
         E(i,0) *= 1/J;
       }
     }
-
   }
   //--------------------------------------------------------------------
   void ATC_Transfer::compute_transformed_stress(DENS_MAT & stress,
@@ -1898,24 +2018,22 @@ namespace ATC {
   {
       stress.reset(nNodes_,FieldSizes[TRANSFORMED_STRESS]);
       DENS_MAT S(3,3),FT(3,3),P(3,3);
+      DENS_MAT G(3,3);
       for (int i = 0; i < nNodes_; i++) {
-        if (atomToElementMapType_ == EULERIAN) {
-          vector_to_symm_matrix(i,T,P);
+        if (atomToElementMapType_ == EULERIAN) { // H = grad u
+          global_to_matrix(i,T,P);
           // for Eulerian analysis: F^T = (1-H)^{-T}
-          DENS_MAT G(3,3);
-          vector_to_matrix(i,H,G);
+          global_to_matrix(i,H,G);
           G *= -1.;
-
-          G(0,0) += 1.0; G(1,1) += 1.0; G(2,2) += 1.0;
+          matrix3::add_identity(G);
           FT = inv(G.transpose());
         }
-        else{
-          vector_to_matrix(i,T,P);
+        else { // H = Grad u
+          global_to_matrix(i,T,P);
           // for Lagrangian analysis: F^T = (1+H)^T
           DENS_MAT F(3,3);
-          vector_to_matrix(i,H,F);
-
-          F(0,0) += 1.0; F(1,1) += 1.0; F(2,2) += 1.0;
+          global_to_matrix(i,H,F);
+          matrix3::add_identity(F);
           FT = F.transpose(); 
         }
         //
@@ -1925,7 +2043,7 @@ namespace ATC {
           FT = inv(FT); 
         }
         S = P*FT;
-        matrix_to_vector(i,S,stress);
+        matrix_to_global(S,i,stress);
       }
   }
   //--------------------------------------------------------------------
@@ -1934,77 +2052,95 @@ namespace ATC {
   {
     DENS_MAT F(3,3),R(3,3),U(3,3);
     for (int i = 0; i < nNodes_; i++) { 
-      vector_to_matrix(i,H,F);
-      F(0,0) += 1.0; F(1,1) += 1.0; F(2,2) += 1.0;
+      global_to_matrix(i,H,F);
+      matrix3::add_identity(F);
       if (atomToElementMapType_ == EULERIAN) { 
         polar_decomposition(F,R,U,false); } // F = V R
       else  {
         polar_decomposition(F,R,U); } // F = R U
       // copy to local
       if ( fieldFlags_(ROTATION) ) {
-
-        matrix_to_vector(i,R,rotation);
+        matrix_to_global(R,i,rotation);
       }
       if ( fieldFlags_(STRETCH) ) {
-        matrix_to_vector(i,U,stretch);
+        matrix_to_global(U,i,stretch);
       }
+    }
+  }
+  //--------------------------------------------------------------------
+  void ATC_Transfer::compute_eigenvectors( DENS_MAT & evectors, 
+    const DENS_MAT & M)
+  {
+    DENS_MAT U(3,3), V(3,3);
+    for (int i = 0; i < nNodes_; i++) { 
+      global_to_matrix(i,M,U);
+      eigenvectors(U,V);
+      matrix_to_global(V.transpose(),i,evectors);
     }
   }
   //--------------------------------------------------------------------
   void ATC_Transfer::compute_elastic_deformation_gradient(DENS_MAT & Fe,
     const DENS_MAT & P, const DENS_MAT & H)
-  
   {
-    // calculate Fe for every node
-    const double nktv2p = lammpsInterface_->nktv2p();
-    const double fact = 1.0/ ( lammpsInterface_->mvv2e()*nktv2p );
-    for (int i = 0; i < nNodes_; i++) { 
-      DENS_VEC Pv = global_vector_to_vector(i,P);
-      Pv *= fact;
-      CBElasticTangentOperator tangent(cauchyBornStress_, Pv);
-      NonLinearSolver solver(&tangent);
-      DENS_VEC Fv = global_vector_to_vector(i,H);  // pass in initial guess
-      add_identity_voigt_unsymmetric(Fv);
-      solver.solve(Fv);
-      vector_to_global_vector(i,Fv,Fe);
-    }
-  }
-  //--------------------------------------------------------------------
-  void ATC_Transfer::compute_elastic_deformation_gradient2(DENS_MAT & Fe,
-    const DENS_MAT & P, const DENS_MAT & H)
-  {
+    bool cauchy = (P.nCols() == 6);
     // calculate Fe for every node
     const double nktv2p = lammpsInterface_->nktv2p();
     const double fact = 1.0/ ( lammpsInterface_->mvv2e()*nktv2p );
     DENS_MAT F(3,3),R(3,3),U(3,3),PP(3,3),S(3,3);
     for (int i = 0; i < nNodes_; i++) { 
       // get F = RU
-      vector_to_matrix(i,H,F);
-      F(0,0) += 1.0; F(1,1) += 1.0; F(2,2) += 1.0;
+      global_to_matrix(i,H,F);
+      matrix3::add_identity(F);
       if (atomToElementMapType_ == EULERIAN) { 
         polar_decomposition(F,R,U,false); } // F = V R
       else  {
         polar_decomposition(F,R,U); } // F = R U
       // get S
-      vector_to_matrix(i,P,PP);
-      //S = PP*transpose(F);
-      S = inv(F)*PP;
-      
-      S += S.transpose(); S *= 0.5; // symmetrize
       DENS_VEC Sv = to_voigt(S);
+      if (cauchy) {
+        global_to_vector(i,P,Sv); // viral from lammps
+      }
+      else { 
+        global_to_matrix(i,P,PP); // 1st PK
+        S = inv(F)*PP; // 2nd PK
+        S += S.transpose(); S *= 0.5; // symmetrize
+        Sv = to_voigt(S);
+      }
       Sv *= fact;
       // solve min_U || S - S_CB(U) ||
-      CB2ndElasticTangentOperator tangent(cauchyBornStress_, Sv);
+      SecondElasticTangentOperator tangent(cauchyBornStress_, Sv);
       NonLinearSolver solver(&tangent);
-      //DENS_VEC Uv = to_voigt_unsymmetric(U);  // pass in initial guess
       DENS_VEC Uv = to_voigt(U);  // pass in initial guess
-      //DENS_VEC Uv(6); Uv(0)=1;Uv(1)=1;Uv(2)=1;Uv(3)=0;Uv(4)=0;Uv(5)=0;
       solver.solve(Uv);
       DENS_MAT Ue = from_voigt(Uv);
       DENS_MAT FFe = R*Ue;
-      matrix_to_vector(i,FFe,Fe);
+      matrix_to_global(FFe,i,Fe);
     }
   }
+  //--------------------------------------------------------------------
+  void ATC_Transfer::compute_virial_strain(DENS_MAT & Fe,
+    const DENS_MAT & S)
+  {
+    int ncols = S.nCols();
+    const double nktv2p = lammpsInterface_->nktv2p();
+    const double fact = 1.0/ ( lammpsInterface_->mvv2e()*nktv2p );
+    DENS_VEC Sv(ncols),Uv(ncols);
+    for (int i = 0; i < nNodes_; i++) { 
+      for (int j = 0; j < ncols; j++) {  Sv(j) = S(i,j); }
+      Sv *= fact; // convert stress [LAMMPS units] ==> [ATC units]
+      // solve min_U || S - S_CB(U) ||
+      SecondElasticTangentOperator tangent(cauchyBornStress_, Sv);
+      NonLinearSolver solver(&tangent);
+      Uv(0) = Uv(1) = Uv(2) = 1; Uv(3) = Uv(4) = Uv(5) = 0;
+      solver.solve(Uv);
+      //Sv.print("S");
+      //Uv.print("U");
+      Fe(i,0) = Uv(0); Fe(i,1) = Uv(3); Fe(i,2) = Uv(4); 
+      Fe(i,3) = Uv(3); Fe(i,4) = Uv(1); Fe(i,5) = Uv(5); 
+      Fe(i,6) = Uv(4); Fe(i,7) = Uv(5); Fe(i,8) = Uv(2); 
+    }
+  }
+//!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 // ===========   Analytical solutions ==========================
 } // end namespace ATC
 
